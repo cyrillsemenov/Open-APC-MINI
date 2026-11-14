@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Open APC Mini Firmware, Validator & WebMIDI Updater"
 readme = "README.md"
 license = { file = "LICENSE" }
-requires-python = ">=3.15"
+requires-python = ">=3.11"
 dependencies = ["mido>=1.3.3", "python-rtmidi>=1.5.8", "unicorn>=2.1.4"]
 
 [project.scripts]
