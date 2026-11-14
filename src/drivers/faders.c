@@ -1,3 +1,4 @@
+#include <stdbool.h>
 #include <libopencm3/stm32/adc.h>
 #include <libopencm3/stm32/dma.h>
 #include <libopencm3/stm32/gpio.h>
@@ -5,14 +6,10 @@
 #include "faders.h"
 
 static volatile uint16_t s_adc_dma_buf[APC_FADER_COUNT];
-static uint16_t s_raw_snap[APC_FADER_COUNT];
-static uint16_t s_adc_prev[APC_FADER_COUNT];
 static uint16_t s_hist[APC_FADER_COUNT][APC_ADC_WINDOW_SAMPLES];
 static uint8_t s_cc_val[APC_FADER_COUNT];
-static uint8_t s_prev0[APC_FADER_COUNT];
-static uint8_t s_prev1[APC_FADER_COUNT];
-static uint8_t s_sample_idx = 0;
-static uint16_t s_dirty_mask = 0;
+static uint8_t s_ring_idx = 0;
+static uint8_t s_warm_samples = 0;
 static uint16_t s_stall_guard = 0;
 
 static void adc_dma_hw_init(void) {
@@ -20,7 +17,6 @@ static void adc_dma_hw_init(void) {
 
     rcc_periph_clock_enable(RCC_DMA1);
     rcc_periph_clock_enable(RCC_ADC1);
-    rcc_periph_clock_enable(RCC_ADC2);
 
     gpio_set_mode(GPIOA, GPIO_MODE_INPUT, GPIO_CNF_INPUT_ANALOG, APC_FADER_GPIOA_MASK);
     gpio_set_mode(GPIOC, GPIO_MODE_INPUT, GPIO_CNF_INPUT_ANALOG, APC_FADER_MASTER_PIN);
@@ -50,20 +46,55 @@ static void adc_dma_hw_init(void) {
     adc_set_regular_sequence(ADC1, APC_FADER_COUNT, (uint8_t *)k_adc_channels);
     adc_enable_dma(ADC1);
     adc_power_on(ADC1);
+
+    // Wait >= t_STAB (~3 us at 48 MHz, >= 2 ADCCLK cycles) before starting ADC calibration
+    for (volatile uint16_t d = 0; d < 160U; d++) {}
+
     adc_reset_calibration(ADC1);
     adc_calibrate(ADC1);
-
-    // Calibrate ADC2 as well (matches stock board initialization)
-    adc_power_off(ADC2);
-    adc_power_on(ADC2);
-    adc_reset_calibration(ADC2);
-    adc_calibrate(ADC2);
 
     dma_clear_interrupt_flags(DMA1, DMA_CHANNEL1, DMA_GIF);
     adc_start_conversion_regular(ADC1);
 }
 
-static void harvest_dma_transfer(void) {
+static uint8_t adc_to_cc_nearest(uint16_t avg) {
+    if (avg <= APC_ADC_ZERO_MAX) {
+        return 0;
+    }
+    if (avg >= APC_ADC_FULL_MIN) {
+        return 127U;
+    }
+    uint32_t num =
+        ((uint32_t)(avg - APC_ADC_ZERO_MAX) * 127UL) + ((uint32_t)APC_ADC_SCALE_SPAN / 2UL);
+    return (uint8_t)(num / (uint32_t)APC_ADC_SCALE_SPAN);
+}
+
+static uint8_t quantize_cc_hysteresis(uint16_t avg, uint8_t cur_cc) {
+    uint8_t raw_cc = adc_to_cc_nearest(avg);
+    if (raw_cc == cur_cc) {
+        return cur_cc;
+    }
+
+    if (raw_cc == (uint8_t)(cur_cc + 1U)) {
+        if (avg >= APC_ADC_FULL_MIN) {
+            return 127U;
+        }
+        uint16_t shifted = (avg > APC_ADC_HYSTERESIS) ? (uint16_t)(avg - APC_ADC_HYSTERESIS) : 0U;
+        return (adc_to_cc_nearest(shifted) > cur_cc) ? raw_cc : cur_cc;
+    }
+
+    if ((uint8_t)(raw_cc + 1U) == cur_cc) {
+        if (avg <= APC_ADC_ZERO_MAX) {
+            return 0;
+        }
+        uint16_t shifted = (uint16_t)(avg + APC_ADC_HYSTERESIS);
+        return (adc_to_cc_nearest(shifted) < cur_cc) ? raw_cc : cur_cc;
+    }
+
+    return raw_cc;
+}
+
+static bool harvest_dma_transfer(void) {
     if (!dma_get_interrupt_flag(DMA1, DMA_CHANNEL1, DMA_TCIF)) {
         if (++s_stall_guard > 5000U) {
             s_stall_guard = 0;
@@ -73,142 +104,80 @@ static void harvest_dma_transfer(void) {
             dma_enable_channel(DMA1, DMA_CHANNEL1);
             adc_start_conversion_regular(ADC1);
         }
-        return;
+        return false;
     }
     s_stall_guard = 0;
 
     for (uint8_t i = 0; i < APC_FADER_COUNT; i++) {
-        s_raw_snap[i] = s_adc_dma_buf[i];
+        s_hist[i][s_ring_idx] = s_adc_dma_buf[i];
     }
 
-    s_dirty_mask = 0;
-    for (uint8_t i = 0; i < APC_FADER_COUNT; i++) {
-        uint16_t raw = s_raw_snap[i];
-        if (s_cc_val[i] == 0 && raw <= APC_ADC_ZERO_CLAMP) {
-            s_adc_prev[i] = raw;
-            s_prev1[i] = 0;
-        } else if (s_cc_val[i] == 127U && raw >= APC_ADC_FULL_CLAMP) {
-            s_adc_prev[i] = raw;
-            s_prev1[i] = 127U;
-        }
-
-        uint16_t diff = (s_adc_prev[i] >= raw) ? (uint16_t)(s_adc_prev[i] - raw)
-                                               : (uint16_t)(raw - s_adc_prev[i]);
-        if (diff >= APC_ADC_TRIGGER_DELTA) {
-            s_dirty_mask |= (uint16_t)(1U << i);
-        }
+    s_ring_idx++;
+    if (s_ring_idx >= APC_ADC_WINDOW_SAMPLES) {
+        s_ring_idx = 0;
+    }
+    if (s_warm_samples < APC_ADC_WINDOW_SAMPLES) {
+        s_warm_samples++;
     }
 
     dma_clear_interrupt_flags(DMA1, DMA_CHANNEL1, DMA_TCIF);
     adc_start_conversion_regular(ADC1);
+    return (s_warm_samples >= APC_ADC_WINDOW_SAMPLES);
 }
 
 void faders_init(void) {
     for (uint8_t i = 0; i < APC_FADER_COUNT; i++) {
         s_adc_dma_buf[i] = 0;
-        s_raw_snap[i] = 0;
-        s_adc_prev[i] = 0;
         s_cc_val[i] = 0;
-        s_prev0[i] = 0;
-        s_prev1[i] = 0;
         for (uint8_t s = 0; s < APC_ADC_WINDOW_SAMPLES; s++) {
             s_hist[i][s] = 0;
         }
     }
-    s_sample_idx = 0;
-    s_dirty_mask = 0;
+    s_ring_idx = 0;
+    s_warm_samples = 0;
     s_stall_guard = 0;
 
     adc_dma_hw_init();
 }
 
 void faders_task(faders_change_fn on_change) {
-    harvest_dma_transfer();
-
-    if (s_dirty_mask == 0) {
+    if (!harvest_dma_transfer()) {
         return;
     }
-    s_dirty_mask = 0;
-
-    for (uint8_t i = 0; i < APC_FADER_COUNT; i++) {
-        s_hist[i][s_sample_idx] = s_raw_snap[i];
-    }
-
-    s_sample_idx++;
-    if (s_sample_idx < APC_ADC_WINDOW_SAMPLES) {
-        return;
-    }
-    s_sample_idx = 0;
-
-    uint16_t d01[APC_FADER_COUNT];
-    uint16_t d12[APC_FADER_COUNT];
-    uint16_t d02[APC_FADER_COUNT];
-    uint16_t outlier_mask = 0;
 
     for (uint8_t i = 0; i < APC_FADER_COUNT; i++) {
         uint16_t s0 = s_hist[i][0];
         uint16_t s1 = s_hist[i][1];
         uint16_t s2 = s_hist[i][2];
 
-        d01[i] = (s0 >= s1) ? (uint16_t)(s0 - s1) : (uint16_t)(s1 - s0);
-        if (d01[i] >= APC_ADC_OUTLIER_DELTA) {
-            outlier_mask |= (uint16_t)(1U << i);
+        uint16_t d01 = (s0 >= s1) ? (uint16_t)(s0 - s1) : (uint16_t)(s1 - s0);
+        if (d01 >= APC_ADC_OUTLIER_DELTA) {
             continue;
         }
 
-        d12[i] = (s1 >= s2) ? (uint16_t)(s1 - s2) : (uint16_t)(s2 - s1);
-        if (d12[i] >= APC_ADC_OUTLIER_DELTA) {
-            outlier_mask |= (uint16_t)(1U << i);
+        uint16_t d12 = (s1 >= s2) ? (uint16_t)(s1 - s2) : (uint16_t)(s2 - s1);
+        if (d12 >= APC_ADC_OUTLIER_DELTA) {
             continue;
         }
 
-        d02[i] = (s0 >= s2) ? (uint16_t)(s0 - s2) : (uint16_t)(s2 - s0);
-        if (d02[i] >= APC_ADC_OUTLIER_DELTA) {
-            outlier_mask |= (uint16_t)(1U << i);
-            continue;
-        }
-    }
-
-    for (uint8_t i = 0; i < APC_FADER_COUNT; i++) {
-        if ((outlier_mask & (1U << i)) != 0) {
+        uint16_t d02 = (s0 >= s2) ? (uint16_t)(s0 - s2) : (uint16_t)(s2 - s0);
+        if (d02 >= APC_ADC_OUTLIER_DELTA) {
             continue;
         }
 
-        uint16_t s0 = s_hist[i][0];
-        uint16_t s1 = s_hist[i][1];
-        uint16_t s2 = s_hist[i][2];
         uint16_t avg;
-
-        // Average the two closest samples out of the 3-sample window
-        if (d01[i] > d12[i]) {
-            avg = (d12[i] > d02[i]) ? (uint16_t)((s0 + s2) / 2U) : (uint16_t)((s1 + s2) / 2U);
+        if (d01 > d12) {
+            avg = (d12 > d02) ? (uint16_t)((s0 + s2) / 2U) : (uint16_t)((s1 + s2) / 2U);
         } else {
-            avg = (d01[i] > d02[i]) ? (uint16_t)((s0 + s2) / 2U) : (uint16_t)((s0 + s1) / 2U);
+            avg = (d01 > d02) ? (uint16_t)((s0 + s2) / 2U) : (uint16_t)((s0 + s1) / 2U);
         }
 
-        s_adc_prev[i] = avg;
-
-        uint8_t new_cc;
-        if (avg >= APC_ADC_FULL_MIN) {
-            new_cc = 127U;
-        } else if (avg <= APC_ADC_ZERO_MAX) {
-            new_cc = 0;
-        } else {
-            int32_t scaled = (((int32_t)avg - (int32_t)APC_ADC_ZERO_MAX) << 7) / APC_ADC_SCALE_SPAN;
-            if (scaled > 127) {
-                scaled = 127;
-            }
-            new_cc = (uint8_t)scaled;
-        }
-
-        if (s_cc_val[i] == new_cc || new_cc == s_prev1[i]) {
+        uint8_t new_cc = quantize_cc_hysteresis(avg, s_cc_val[i]);
+        if (new_cc == s_cc_val[i]) {
             continue;
         }
 
-        s_prev1[i] = s_prev0[i];
-        s_prev0[i] = new_cc;
         s_cc_val[i] = new_cc;
-
         if (on_change != 0) {
             on_change(i, new_cc);
         }
