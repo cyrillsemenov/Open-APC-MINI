@@ -179,6 +179,14 @@ void kick_adc(void) {
 
     fader_dirty_mask = 0;
     for (i = 0; i < 9; i++) {
+        if (faders[i].cc_val == 0 && faders[i].raw <= 8) {
+            adc_prev[i] = faders[i].raw;
+            fader_prev1[i] = 0;
+        } else if (faders[i].cc_val == 127 && faders[i].raw >= 0x0FF7) {
+            adc_prev[i] = faders[i].raw;
+            fader_prev1[i] = 127;
+        }
+
         uint16_t diff = (adc_prev[i] >= faders[i].raw) ? (uint16_t)(adc_prev[i] - faders[i].raw)
                                                        : (uint16_t)(faders[i].raw - adc_prev[i]);
         if (diff >= 26) {
