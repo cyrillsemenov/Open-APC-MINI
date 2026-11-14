@@ -1,8 +1,13 @@
 CompileFlags:
   Add:
     - --target=arm-none-eabi
-    - -DSTM32F103xB
-    - -include stm32f10x
+    - -DSTM32F1
+    - -Iinclude
+    - -Isrc
+    - -Isrc/board
+    - -Isrc/platform
+    - -Isrc/usb
+    - -Ilib/libopencm3/include
 Diagnostics:
   UnusedIncludes: None
   MissingIncludes: None

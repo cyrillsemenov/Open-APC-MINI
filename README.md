@@ -4,7 +4,7 @@ I have my APC Mini lying around which I've been using on and off for years. It's
 
 One project inspired me: [craigsblackie/MPK-Mini-open](https://github.com/craigsblackie/MPK-Mini-open). The MPK uses almost the same MCU as the APC (`STM32F102RBT6`), so it was almost definitely vulnerable to power-glitch readout via [CTXz/stm32f1-picopwner](https://github.com/CTXz/stm32f1-picopwner). I connected all needed wires to an RPi Pico and dumped the firmware. Why do we need a dump? First of all, it is a save point; second, we might find something interesting in there. And boy there was — a hidden bootloader mode, activated only by a special SysEx command! Even more counterintuitive is that on stock firmware, after you send this command, you have to physically power-cycle the APC to enter Updater mode before you can flash your own firmware onto it.
 
-The circuit of the APC Mini is remarkably simple: just an STM32F102RBT6 MCU and a TM1629 for the LEDs. So my first goal was to recreate the stock firmware and apply a couple of fixes. Intuition told me it used the ST Standard Peripheral SDK, which provided the peripheral library and USB stack (`STM32F10x_StdPeriph_Driver` V3.5.0 + `STM32_USB-FS-Device_Driver` V4.1.0), so I used that to fully and faithfully recreate the stock firmware.
+The circuit of the APC Mini is remarkably simple: just an STM32F102RBT6 MCU and a TM1629 for the LEDs. So my first goal was to recreate the stock firmware and apply a couple of fixes, initially reconstructing it against the ST Standard Peripheral SDK before migrating the peripheral and USB-MIDI stack to [`libopencm3`](https://github.com/libopencm3/libopencm3).
 
 I wanted to fix two things right away:
 
@@ -13,7 +13,7 @@ I wanted to fix two things right away:
 
 As a result, we now have a nice working firmware, a **WebMIDI Firmware Updater**, a Unicorn Cortex-M3 hardware emulator test suite, and a lot of plans:
 
-- [ ] Migrate to [libopencm3/libopencm3](https://github.com/libopencm3/libopencm3)
+- [x] Migrate to [libopencm3/libopencm3](https://github.com/libopencm3/libopencm3)
 - [ ] Implement Mackie Control Universal (MCU)
 - [ ] [monome/serialosc](https://github.com/monome/serialosc) compatibility
 - [ ] Poor man's monome grid (run Lua scripts inside your APC)
@@ -31,8 +31,11 @@ As a result, we now have a nice working firmware, a **WebMIDI Firmware Updater**
 ### Commands
 
 ```sh
-# Build .bin and bootloader MIDI SysEx .syx
+# Build .bin and bootloader MIDI SysEx .syx (default BOOTLOADER=1 @ 0x08002000)
 make all
+
+# Optional: build a standalone SWD image at 0x08000000 (without factory bootloader)
+make BOOTLOADER=0 all
 
 # Flash directly via command-line
 make flash
@@ -67,4 +70,4 @@ If you build, adapt, or port this firmware for **any custom PCB, clone, or non-A
 
 ## License
 
-Released under the [MIT License](LICENSE) (with third-party notices for the STMicroelectronics `STM32F10x_StdPeriph_Driver` / `STM32_USB-FS-Device_Driver` and ARM CMSIS libraries included in [LICENSE](LICENSE)).
+Released under the [MIT License](LICENSE) (linking against [`libopencm3`](https://github.com/libopencm3/libopencm3) under `LGPL-3.0-or-later`; see third-party notices in [LICENSE](LICENSE)).

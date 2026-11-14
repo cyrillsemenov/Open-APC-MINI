@@ -1,3 +1,6 @@
+#include <libopencm3/stm32/adc.h>
+#include <libopencm3/stm32/dma.h>
+#include <libopencm3/stm32/gpio.h>
 #include "apc_mini.h"
 #include "buttons_faders.h"
 
@@ -36,13 +39,13 @@ void scan_buttons(void) {
     scan_gate = 8;
 
     for (col = 0; col < 11; col++) {
-        // Set PC5..PC15 HIGH, then pull active column (col + 5) LOW
-        GPIOC->ODR |= 0xFFE0U;
-        GPIOC->ODR &= (uint16_t)~(0x0020U << col);
+        // Set PC5..PC15 HIGH, then pull active column (col + 5) LOW atomically via BSRR
+        uint32_t col_bit = (uint32_t)(0x0020U << col);
+        GPIO_BSRR(GPIOC) = (col_bit << 16) | (0xFFE0UL & ~col_bit);
 
         for (d = 0; d < 30; d++) {}
 
-        uint8_t raw = (uint8_t)(GPIOB->IDR & 0x00FFU);
+        uint8_t raw = (uint8_t)(GPIO_IDR(GPIOB) & 0x00FFU);
 
         if (btn_debounce_val[col] == raw) {
             if (btn_debounce_cnt[col] < 15) {
@@ -57,6 +60,9 @@ void scan_buttons(void) {
             btn_debounce_cnt[col] = 0;
         }
     }
+
+    // Release all button strobes HIGH after scan pass
+    GPIO_BSRR(GPIOC) = 0xFFE0UL;
 }
 
 void report_buttons(void) {
@@ -137,6 +143,7 @@ void report_buttons(void) {
             if (btn_prev_shift != bit_val) {
                 btn_prev_shift = bit_val;
                 shift_held_state = (bit_val != 0) ? 1 : 0;
+                (void)shift_held_state;
                 pkt[0] = (bit_val != 0) ? 0x09 : 0x08;
                 pkt[1] = (bit_val != 0) ? 0x90 : 0x80;
                 pkt[2] = 0x62;
@@ -160,14 +167,14 @@ void kick_adc(void) {
     static uint16_t dma_stall_guard = 0;
     uint8_t i;
 
-    if (DMA_GetFlagStatus(DMA1_FLAG_TC1) == RESET) {
+    if (!dma_get_interrupt_flag(DMA1, DMA_CHANNEL1, DMA_TCIF)) {
         if (++dma_stall_guard > 5000) {
             dma_stall_guard = 0;
-            DMA_Cmd(DMA1_Channel1, DISABLE);
-            DMA1_Channel1->CNDTR = 9;
-            DMA_ClearFlag(DMA1_FLAG_GL1);
-            DMA_Cmd(DMA1_Channel1, ENABLE);
-            ADC_SoftwareStartConvCmd(ADC1, ENABLE);
+            dma_disable_channel(DMA1, DMA_CHANNEL1);
+            dma_set_number_of_data(DMA1, DMA_CHANNEL1, 9);
+            dma_clear_interrupt_flags(DMA1, DMA_CHANNEL1, DMA_GIF);
+            dma_enable_channel(DMA1, DMA_CHANNEL1);
+            adc_start_conversion_regular(ADC1);
         }
         return;
     }
@@ -196,8 +203,8 @@ void kick_adc(void) {
         }
     }
 
-    DMA_ClearFlag(DMA1_FLAG_TC1);
-    ADC_SoftwareStartConvCmd(ADC1, ENABLE);
+    dma_clear_interrupt_flags(DMA1, DMA_CHANNEL1, DMA_TCIF);
+    adc_start_conversion_regular(ADC1);
 }
 
 void report_faders(void) {

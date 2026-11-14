@@ -1,5 +1,6 @@
 PROJECT       := apc_mini
 BUILD_DIR     ?= build
+BOOTLOADER    ?= 1
 
 CROSS_COMPILE ?= arm-none-eabi-
 CC            := $(CROSS_COMPILE)gcc
@@ -8,28 +9,16 @@ OBJDUMP       := $(CROSS_COMPILE)objdump
 SIZE          := $(CROSS_COMPILE)size
 UV            ?= uv
 
-STDPERIPH_DIR := lib/STM32F10x_StdPeriph_Lib/Libraries
-CMSIS_CORE    := $(STDPERIPH_DIR)/CMSIS/CM3/CoreSupport
-CMSIS_DEV     := $(STDPERIPH_DIR)/CMSIS/CM3/DeviceSupport/ST/STM32F10x
-STDPERIPH_INC := $(STDPERIPH_DIR)/STM32F10x_StdPeriph_Driver/inc
-STDPERIPH_SRC := $(STDPERIPH_DIR)/STM32F10x_StdPeriph_Driver/src
-USB_DRV_DIR   := lib/STM32_USB-FS-Device_Driver
-USB_DRV_INC   := $(USB_DRV_DIR)/inc
-USB_DRV_SRC   := $(USB_DRV_DIR)/src
+OPENCM3_DIR   := lib/libopencm3
+OPENCM3_LIB   := $(OPENCM3_DIR)/lib/libopencm3_stm32f1.a
 
 INCLUDES := \
 	-Iinclude \
-	-Iinclude/board \
-	-Iinclude/platform \
-	-Iinclude/usb \
 	-Isrc \
 	-Isrc/board \
 	-Isrc/platform \
 	-Isrc/usb \
-	-I$(CMSIS_CORE) \
-	-I$(CMSIS_DEV) \
-	-I$(STDPERIPH_INC) \
-	-I$(USB_DRV_INC)
+	-I$(OPENCM3_DIR)/include
 
 # -----------------------------------------------------------------------------
 # USB Identity & Legal Notice:
@@ -56,9 +45,16 @@ USB_STRING_VENDOR  ?= AKAI PROFESSIONAL,LP
 USB_STRING_PRODUCT ?= APC MINI
 USB_STRING_SERIAL  ?= $(GIT_VERSION)
 
+ifeq ($(BOOTLOADER),0)
+MODE_SUFFIX   := standalone
+LDSCRIPT      := ld/stm32f102rb_standalone.ld
+else
+MODE_SUFFIX   := app
+LDSCRIPT      := ld/stm32f102rb_app.ld
+endif
+
 DEFINES := \
-	-DSTM32F10X_MD \
-	-DUSE_STDPERIPH_DRIVER \
+	-DSTM32F1 \
 	-DUSB_VID=$(USB_VID) \
 	-DUSB_PID=$(USB_PID) \
 	'-DUSB_STRING_VENDOR="$(USB_STRING_VENDOR)"' \
@@ -80,79 +76,70 @@ CFLAGS := \
 	$(DEFINES) \
 	$(INCLUDES)
 
-LDFLAGS := \
-	-mcpu=cortex-m3 \
-	-mthumb \
-	-Tld/stm32f102rb_app.ld \
-	-nostartfiles \
-	-Wl,--gc-sections \
-	-Wl,-Map=$(BUILD_DIR)/$(PROJECT)_app.map \
-	--specs=nano.specs \
-	--specs=nosys.specs
-
-APP_SRCS := \
-	src/main.c \
-	src/platform/startup_stm32f10x_md.c \
-	src/platform/stm32f10x_it.c \
-	src/board/hw_config.c \
-	src/board/leds_tm1629.c \
-	src/board/buttons_faders.c \
-	src/usb/usb_desc.c \
-	src/usb/usb_prop.c \
-	src/usb/usb_pwr.c \
-	src/usb/usb_istr.c \
-	src/usb/usb_endp.c \
-	src/usb/usb_midi_io.c
-
-STDPERIPH_SRCS := \
-	$(STDPERIPH_SRC)/misc.c \
-	$(STDPERIPH_SRC)/stm32f10x_adc.c \
-	$(STDPERIPH_SRC)/stm32f10x_dma.c \
-	$(STDPERIPH_SRC)/stm32f10x_flash.c \
-	$(STDPERIPH_SRC)/stm32f10x_gpio.c \
-	$(STDPERIPH_SRC)/stm32f10x_iwdg.c \
-	$(STDPERIPH_SRC)/stm32f10x_rcc.c
-
-USB_SRCS := \
-	$(USB_DRV_SRC)/usb_core.c \
-	$(USB_DRV_SRC)/usb_init.c \
-	$(USB_DRV_SRC)/usb_int.c \
-	$(USB_DRV_SRC)/usb_mem.c \
-	$(USB_DRV_SRC)/usb_regs.c \
-	$(USB_DRV_SRC)/usb_sil.c
-
-OBJS := \
-	$(patsubst src/%.c,$(BUILD_DIR)/app/%.o,$(APP_SRCS)) \
-	$(patsubst $(STDPERIPH_SRC)/%.c,$(BUILD_DIR)/stdperiph/%.o,$(STDPERIPH_SRCS)) \
-	$(patsubst $(USB_DRV_SRC)/%.c,$(BUILD_DIR)/usb/%.o,$(USB_SRCS))
-
 APP_ELF       := $(BUILD_DIR)/$(PROJECT)_app.elf
 APP_RAW_BIN   := $(BUILD_DIR)/$(PROJECT)_app_raw.bin
 APP_BIN       := $(BUILD_DIR)/$(PROJECT)_app.bin
 APP_SYX       := $(BUILD_DIR)/$(PROJECT)_app.syx
+
+STANDALONE_ELF := $(BUILD_DIR)/$(PROJECT)_standalone.elf
+STANDALONE_BIN := $(BUILD_DIR)/$(PROJECT)_standalone.bin
+
+TARGET_ELF    := $(BUILD_DIR)/$(PROJECT)_$(MODE_SUFFIX).elf
+TARGET_MAP    := $(BUILD_DIR)/$(PROJECT)_$(MODE_SUFFIX).map
+
+LDFLAGS := \
+	-mcpu=cortex-m3 \
+	-mthumb \
+	-L$(OPENCM3_DIR)/lib \
+	-T$(LDSCRIPT) \
+	-nostartfiles \
+	-Wl,--gc-sections \
+	-Wl,-Map=$(TARGET_MAP) \
+	--specs=nano.specs \
+	--specs=nosys.specs
+
+LDLIBS := \
+	-Wl,--start-group \
+	-lopencm3_stm32f1 \
+	-lc \
+	-lgcc \
+	-lnosys \
+	-Wl,--end-group
+
+APP_SRCS := \
+	src/main.c \
+	src/platform/isr.c \
+	src/board/hw_config.c \
+	src/board/leds_tm1629.c \
+	src/board/buttons_faders.c \
+	src/usb/usb_desc.c \
+	src/usb/usb_endp.c \
+	src/usb/usb_midi_io.c
+
+OBJS := $(patsubst src/%.c,$(BUILD_DIR)/obj/%.o,$(APP_SRCS))
+
 WEB_DIST_DIR  := $(BUILD_DIR)/web
 WEB_PORT      ?= 8000
 
-.PHONY: all sysex verify validate test-validator flash web-dist serve-web disasm clean
+.PHONY: all sysex verify validate test-validator flash web-dist serve-web disasm clean clean-all
 
+ifeq ($(BOOTLOADER),0)
+all: $(STANDALONE_BIN)
+else
 all: $(APP_BIN) $(APP_SYX)
+endif
 
 sysex: $(APP_SYX)
 
-$(BUILD_DIR)/app/%.o: src/%.c
+$(OPENCM3_LIB):
+	$(MAKE) -C $(OPENCM3_DIR) TARGETS=stm32/f1 PREFIX="$(CROSS_COMPILE)"
+
+$(BUILD_DIR)/obj/%.o: src/%.c | $(OPENCM3_LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/stdperiph/%.o: $(STDPERIPH_SRC)/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) -c $< -o $@
-
-$(BUILD_DIR)/usb/%.o: $(USB_DRV_SRC)/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) -c $< -o $@
-
-$(APP_ELF): $(OBJS) $(EXTRA_OBJS) ld/stm32f102rb_app.ld
-	$(CC) $(OBJS) $(EXTRA_OBJS) $(LDFLAGS) $(EXTRA_LDFLAGS) -o $@
+$(TARGET_ELF): $(OBJS) $(EXTRA_OBJS) $(OPENCM3_LIB) $(LDSCRIPT)
+	$(CC) $(OBJS) $(EXTRA_OBJS) $(LDFLAGS) $(EXTRA_LDFLAGS) -o $@ $(LDLIBS)
 	$(SIZE) $@
 
 $(APP_RAW_BIN): $(APP_ELF)
@@ -163,6 +150,9 @@ $(APP_BIN): $(APP_RAW_BIN) tools/stamp_fw.py
 
 $(APP_SYX): $(APP_BIN) tools/bin_to_sysex.py
 	$(UV) run bin_to_sysex $(APP_BIN) $(APP_SYX)
+
+$(STANDALONE_BIN): $(STANDALONE_ELF)
+	$(OBJCOPY) -O binary $< $@
 
 verify validate: $(APP_BIN) $(APP_SYX)
 	$(UV) run validate_fw $(APP_BIN)
@@ -180,8 +170,13 @@ serve-web: web-dist
 	@echo "Opening WebMIDI Updater at http://localhost:$(WEB_PORT) (localhost is a W3C Secure Context)"
 	python3 -m http.server --bind 127.0.0.1 -d $(WEB_DIST_DIR) $(WEB_PORT)
 
-disasm: $(APP_ELF)
-	$(OBJDUMP) -d -S $(APP_ELF) > $(BUILD_DIR)/$(PROJECT)_app.lst
+disasm: $(TARGET_ELF)
+	$(OBJDUMP) -d -S $(TARGET_ELF) > $(BUILD_DIR)/$(PROJECT)_$(MODE_SUFFIX).lst
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+clean-all: clean
+	$(MAKE) -C $(OPENCM3_DIR) clean
+
+-include $(OBJS:.o=.d)

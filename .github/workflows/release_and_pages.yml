@@ -45,6 +45,7 @@ jobs:
       - name: Build firmware (.bin and .syx) & run Unicorn hardware verification
         run: |
           make all
+          make BOOTLOADER=0 all
           make verify
           make test-validator
 
