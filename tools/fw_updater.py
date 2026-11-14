@@ -1,6 +1,8 @@
 """Flash a stamped .bin or pre-encoded .syx firmware image to APC Mini over USB-MIDI."""
 
 import argparse
+import glob
+import os
 import time
 from pathlib import Path
 
@@ -77,9 +79,31 @@ def send_and_wait_ack(
     raise TimeoutError("Timed out waiting for SysEx ACK from APC Mini.")
 
 
+def try_serial_dfu_unlock() -> bool:
+    """If the APC Mini is currently in Monome FTDI mode (/dev/cu.usbserial-m*), send raw DFU unlock."""
+    serial_ports = sorted(glob.glob("/dev/cu.usbserial-m*") + glob.glob("/dev/ttyUSB*"))
+    for sp in serial_ports:
+        try:
+            fd = os.open(sp, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+            try:
+                os.write(fd, UNLOCK_SYSEX)
+                print(f"Sent raw DFU unlock over Monome serial port {sp}; waiting for USB-MIDI bootloader...")
+            finally:
+                os.close(fd)
+            time.sleep(1.5)
+            return True
+        except OSError:
+            pass
+    return False
+
+
 def enter_and_unlock_bootloader(port_filter: str):
-    """Unlocks via system MIDI from either the running App (0x15) or Bootloader (0x3E)."""
-    out_port, in_port = open_apc_midi_ports(port_filter)
+    """Unlocks via system MIDI from either the running App (0x15), Monome FTDI serial, or Bootloader (0x3E)."""
+    try:
+        out_port, in_port = open_apc_midi_ports(port_filter, timeout_s=1.5)
+    except RuntimeError:
+        try_serial_dfu_unlock()
+        out_port, in_port = open_apc_midi_ports(port_filter, timeout_s=8.0)
     unlock_msg = raw_sysex_to_mido(UNLOCK_SYSEX)
     code = send_and_wait_ack(out_port, in_port, unlock_msg)
 

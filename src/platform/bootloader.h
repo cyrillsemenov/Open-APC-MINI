@@ -30,7 +30,7 @@ typedef struct {
     uint32_t uptime_ticks; // [11] board_ticks() at fault
 } apc_crash_log_t;
 
-// Inspects a 64-byte EP1 OUT packet for the stock Akai DFU unlock sequence.
+// Inspects a 64-byte EP1/EP2 OUT packet for the stock Akai DFU unlock sequence.
 // On match, programs the bootloader magic page, sends ACK 0x15, detaches USB, and resets.
 void bootloader_check_unlock_packet(const uint8_t pkt[64]);
 

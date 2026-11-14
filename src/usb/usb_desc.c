@@ -232,3 +232,80 @@ const char *const usb_strings[USB_NUM_STRINGS] = {
     USB_STRING_PRODUCT,
     USB_STRING_SERIAL,
 };
+
+/*---------------------------------------------------------------------------
+ * Profile 2: Monome FTDI FT232R (0403:6001) Serial Descriptor Set
+ *---------------------------------------------------------------------------*/
+const struct usb_device_descriptor usb_ftdi_dev_desc = {
+    .bLength = USB_DT_DEVICE_SIZE,
+    .bDescriptorType = USB_DT_DEVICE,
+    .bcdUSB = 0x0200,
+    .bDeviceClass = 0x00,
+    .bDeviceSubClass = 0x00,
+    .bDeviceProtocol = 0x00,
+    .bMaxPacketSize0 = 64,
+    .idVendor = 0x0403,
+    .idProduct = 0x6001,
+    .bcdDevice = 0x0600,
+    .iManufacturer = 1,
+    .iProduct = 2,
+    .iSerialNumber = 3,
+    .bNumConfigurations = 1,
+};
+
+static const struct usb_endpoint_descriptor ftdi_bulk_endp[] = {
+    {
+        .bLength = USB_DT_ENDPOINT_SIZE,
+        .bDescriptorType = USB_DT_ENDPOINT,
+        .bEndpointAddress = 0x81,
+        .bmAttributes = USB_ENDPOINT_ATTR_BULK,
+        .wMaxPacketSize = 64,
+        .bInterval = 0x00,
+    },
+    {
+        .bLength = USB_DT_ENDPOINT_SIZE,
+        .bDescriptorType = USB_DT_ENDPOINT,
+        .bEndpointAddress = 0x02,
+        .bmAttributes = USB_ENDPOINT_ATTR_BULK,
+        .wMaxPacketSize = 64,
+        .bInterval = 0x00,
+    },
+};
+
+static const struct usb_interface_descriptor ftdi_iface_desc[] = {{
+    .bLength = USB_DT_INTERFACE_SIZE,
+    .bDescriptorType = USB_DT_INTERFACE,
+    .bInterfaceNumber = 0,
+    .bAlternateSetting = 0,
+    .bNumEndpoints = 2,
+    .bInterfaceClass = USB_CLASS_VENDOR,
+    .bInterfaceSubClass = 0xFF,
+    .bInterfaceProtocol = 0xFF,
+    .iInterface = 2,
+    .endpoint = ftdi_bulk_endp,
+    .extra = NULL,
+    .extralen = 0,
+}};
+
+static const struct usb_interface ftdi_ifaces[] = {{
+    .num_altsetting = 1,
+    .altsetting = ftdi_iface_desc,
+}};
+
+const struct usb_config_descriptor usb_ftdi_config_desc = {
+    .bLength = USB_DT_CONFIGURATION_SIZE,
+    .bDescriptorType = USB_DT_CONFIGURATION,
+    .wTotalLength = 0,
+    .bNumInterfaces = 1,
+    .bConfigurationValue = 1,
+    .iConfiguration = 0,
+    .bmAttributes = USB_CONFIG_ATTR_DEFAULT,
+    .bMaxPower = 0xFA, // 500 mA
+    .interface = ftdi_ifaces,
+};
+
+const char *const usb_ftdi_strings[USB_NUM_STRINGS] = {
+    "monome",
+    "monome 64",
+    "m1000001",
+};

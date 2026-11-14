@@ -1,5 +1,6 @@
 #include <stddef.h>
 #include <libopencm3/cm3/nvic.h>
+#include <libopencm3/stm32/iwdg.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/st_usbfs.h>
 #include <libopencm3/usb/usbd.h>
@@ -13,9 +14,29 @@
 #define USB_MIDI_RX_RING_LEN 64U  // 64 x 4B  = 256 B
 #define USB_MIDI_SYSEX_MAX   64U  // Max assembled SysEx length (largest APC msg is 24 B)
 
+#define USB_SER_TX_RING_LEN 256U // 256 B FTDI TX byte ring
+#define USB_SER_RX_RING_LEN 256U // 256 B FTDI RX byte ring
+
+#define FTDI_SIO_RESET             0x00U
+#define FTDI_SIO_MODEM_CTRL        0x01U
+#define FTDI_SIO_SET_FLOW_CTRL     0x02U
+#define FTDI_SIO_SET_BAUD_RATE     0x03U
+#define FTDI_SIO_SET_DATA          0x04U
+#define FTDI_SIO_GET_MODEM_STATUS  0x05U
+#define FTDI_SIO_SET_EVENT_CHAR    0x06U
+#define FTDI_SIO_SET_ERROR_CHAR    0x07U
+#define FTDI_SIO_SET_LATENCY_TIMER 0x09U
+#define FTDI_SIO_GET_LATENCY_TIMER 0x0AU
+#define FTDI_SIO_READ_EEPROM       0x90U
+
+#define FTDI_MODEM_STATUS_B0 0x01U
+#define FTDI_MODEM_STATUS_B1 0x60U
+
 static usbd_device *s_usbd_dev = NULL;
 static uint8_t s_usbd_ctrl_buf[128];
 static volatile bool s_usb_configured = false;
+static usb_profile_t s_active_profile = USB_PROFILE_APC_MIDI;
+static uint8_t s_ftdi_latency = 2U;
 
 static uint8_t s_tx_ring[USB_MIDI_TX_RING_LEN][4];
 static uint8_t s_tx_head = 0;
@@ -28,6 +49,14 @@ static uint8_t s_rx_tail = 0;
 static uint8_t s_sysex_buf[USB_MIDI_SYSEX_MAX];
 static uint16_t s_sysex_len = 0;
 static bool s_sysex_active = false;
+
+static uint8_t s_ser_tx_ring[USB_SER_TX_RING_LEN];
+static uint8_t s_ser_tx_head = 0;
+static uint8_t s_ser_tx_tail = 0;
+
+static uint8_t s_ser_rx_ring[USB_SER_RX_RING_LEN];
+static volatile uint8_t s_ser_rx_head = 0;
+static uint8_t s_ser_rx_tail = 0;
 
 static void rx_ring_push_isr(const uint8_t ev[4]) {
     uint8_t next = (uint8_t)((s_rx_head + 1U) & (USB_MIDI_RX_RING_LEN - 1U));
@@ -65,19 +94,116 @@ static void usb_ep1_in_cb(usbd_device *usbd_dev, uint8_t ep) {
     (void)ep;
 }
 
+static void usb_ftdi_out_cb(usbd_device *usbd_dev, uint8_t ep) {
+    uint8_t pkt[64];
+    uint16_t len = usbd_ep_read_packet(usbd_dev, ep, pkt, sizeof(pkt));
+
+    for (uint16_t i = len; i < sizeof(pkt); i++) {
+        pkt[i] = 0;
+    }
+
+    bootloader_check_unlock_packet(pkt);
+
+    for (uint16_t i = 0; i < len; i++) {
+        uint8_t next = (uint8_t)((s_ser_rx_head + 1U) & (USB_SER_RX_RING_LEN - 1U));
+        if (next == s_ser_rx_tail) {
+            break;
+        }
+        s_ser_rx_ring[s_ser_rx_head] = pkt[i];
+        s_ser_rx_head = next;
+    }
+}
+
+static enum usbd_request_return_codes
+usb_ftdi_control_cb(usbd_device *usbd_dev, struct usb_setup_data *req, uint8_t **buf, uint16_t *len,
+                    usbd_control_complete_callback *complete) {
+    (void)usbd_dev;
+    (void)complete;
+
+    if ((req->bmRequestType & USB_REQ_TYPE_TYPE) != USB_REQ_TYPE_VENDOR) {
+        return USBD_REQ_NEXT_CALLBACK;
+    }
+
+    if ((req->bmRequestType & USB_REQ_TYPE_DIRECTION) == USB_REQ_TYPE_IN) {
+        switch (req->bRequest) {
+        case FTDI_SIO_GET_MODEM_STATUS:
+            (*buf)[0] = FTDI_MODEM_STATUS_B0;
+            (*buf)[1] = FTDI_MODEM_STATUS_B1;
+            *len = 2U;
+            return USBD_REQ_HANDLED;
+
+        case FTDI_SIO_GET_LATENCY_TIMER:
+            (*buf)[0] = s_ftdi_latency;
+            *len = 1U;
+            return USBD_REQ_HANDLED;
+
+        case FTDI_SIO_READ_EEPROM:
+            (*buf)[0] = 0xFFU;
+            (*buf)[1] = 0xFFU;
+            *len = 2U;
+            return USBD_REQ_HANDLED;
+
+        default:
+            *len = 0U;
+            return USBD_REQ_HANDLED;
+        }
+    }
+
+    // Vendor OUT requests (0x40)
+    switch (req->bRequest) {
+    case FTDI_SIO_RESET:
+        if (req->wValue == 1U) {
+            s_ser_rx_head = 0;
+            s_ser_rx_tail = 0;
+        } else if (req->wValue == 2U) {
+            s_ser_tx_head = 0;
+            s_ser_tx_tail = 0;
+        }
+        *len = 0U;
+        return USBD_REQ_HANDLED;
+
+    case FTDI_SIO_SET_LATENCY_TIMER:
+        s_ftdi_latency = (uint8_t)(req->wValue & 0xFFU);
+        *len = 0U;
+        return USBD_REQ_HANDLED;
+
+    case FTDI_SIO_MODEM_CTRL:
+    case FTDI_SIO_SET_FLOW_CTRL:
+    case FTDI_SIO_SET_BAUD_RATE:
+    case FTDI_SIO_SET_DATA:
+    case FTDI_SIO_SET_EVENT_CHAR:
+    case FTDI_SIO_SET_ERROR_CHAR:
+    default:
+        *len = 0U;
+        return USBD_REQ_HANDLED;
+    }
+}
+
 static void usb_set_config_cb(usbd_device *usbd_dev, uint16_t wValue) {
     if (wValue == 0) {
         s_usb_configured = false;
         return;
     }
 
-    usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_out_cb);
-    usbd_ep_setup(usbd_dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_in_cb);
+    if (s_active_profile == USB_PROFILE_MONOME_FTDI) {
+        usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, usb_ftdi_out_cb);
+        usbd_ep_setup(usbd_dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_in_cb);
+        usbd_ep_setup(usbd_dev, 0x02, USB_ENDPOINT_ATTR_BULK, 64, usb_ftdi_out_cb);
+        usbd_register_control_callback(usbd_dev, USB_REQ_TYPE_VENDOR, USB_REQ_TYPE_TYPE,
+                                       usb_ftdi_control_cb);
+    } else {
+        usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_out_cb);
+        usbd_ep_setup(usbd_dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_in_cb);
+    }
     s_usb_configured = true;
 }
 
 static void usb_reset_cb(void) {
     s_usb_configured = false;
+    if (s_usbd_dev != NULL && s_active_profile == USB_PROFILE_MONOME_FTDI) {
+        usbd_register_control_callback(s_usbd_dev, USB_REQ_TYPE_VENDOR, USB_REQ_TYPE_TYPE,
+                                       usb_ftdi_control_cb);
+    }
 }
 
 static void sysex_append_bytes(const uint8_t *bytes, uint8_t count) {
@@ -99,6 +225,30 @@ static void sysex_append_bytes(const uint8_t *bytes, uint8_t count) {
     }
 }
 
+void usb_select_boot_profile(usb_profile_t profile) {
+    s_active_profile = profile;
+}
+
+usb_profile_t usb_get_profile(void) {
+    return s_active_profile;
+}
+
+void usb_switch_profile(usb_profile_t profile) {
+    if (profile == s_active_profile) {
+        return;
+    }
+    s_active_profile = profile;
+    s_usb_configured = false;
+
+    // Detach PA8 USB D+ pull-up so host OS detects a clean USB unplug before re-enumeration
+    board_usb_dp_pullup(false);
+    for (volatile uint32_t d = 0; d < 20000; d++) {
+        iwdg_reset();
+    }
+
+    usb_midi_init();
+}
+
 void usb_midi_init(void) {
     s_usb_configured = false;
     s_tx_head = 0;
@@ -107,12 +257,25 @@ void usb_midi_init(void) {
     s_rx_tail = 0;
     s_sysex_len = 0;
     s_sysex_active = false;
+    s_ser_tx_head = 0;
+    s_ser_tx_tail = 0;
+    s_ser_rx_head = 0;
+    s_ser_rx_tail = 0;
 
     rcc_periph_clock_enable(RCC_USB);
     nvic_enable_irq(NVIC_USB_LP_CAN_RX0_IRQ);
 
-    s_usbd_dev = usbd_init(&st_usbfs_v1_usb_driver, &usb_dev_desc, &usb_config_desc, usb_strings,
-                           USB_NUM_STRINGS, s_usbd_ctrl_buf, sizeof(s_usbd_ctrl_buf));
+    if (s_active_profile == USB_PROFILE_MONOME_FTDI) {
+        s_usbd_dev =
+            usbd_init(&st_usbfs_v1_usb_driver, &usb_ftdi_dev_desc, &usb_ftdi_config_desc,
+                      usb_ftdi_strings, USB_NUM_STRINGS, s_usbd_ctrl_buf, sizeof(s_usbd_ctrl_buf));
+        usbd_register_control_callback(s_usbd_dev, USB_REQ_TYPE_VENDOR, USB_REQ_TYPE_TYPE,
+                                       usb_ftdi_control_cb);
+    } else {
+        s_usbd_dev = usbd_init(&st_usbfs_v1_usb_driver, &usb_dev_desc, &usb_config_desc,
+                               usb_strings, USB_NUM_STRINGS, s_usbd_ctrl_buf,
+                               sizeof(s_usbd_ctrl_buf));
+    }
 
     usbd_register_set_config_callback(s_usbd_dev, usb_set_config_cb);
     usbd_register_reset_callback(s_usbd_dev, usb_reset_cb);
@@ -175,12 +338,58 @@ bool usb_midi_send_sysex(const uint8_t *data, uint16_t len) {
                                data[off + 2U]);
 }
 
+bool usb_serial_write(const uint8_t *data, uint16_t len) {
+    if (data == NULL) {
+        return false;
+    }
+    for (uint16_t i = 0; i < len; i++) {
+        uint8_t next = (uint8_t)((s_ser_tx_head + 1U) & (USB_SER_TX_RING_LEN - 1U));
+        if (next == s_ser_tx_tail) {
+            return false;
+        }
+        s_ser_tx_ring[s_ser_tx_head] = data[i];
+        s_ser_tx_head = next;
+    }
+    return true;
+}
+
+bool usb_serial_read_byte(uint8_t *out_byte) {
+    if (s_ser_rx_tail == s_ser_rx_head) {
+        return false;
+    }
+    *out_byte = s_ser_rx_ring[s_ser_rx_tail];
+    s_ser_rx_tail = (uint8_t)((s_ser_rx_tail + 1U) & (USB_SER_RX_RING_LEN - 1U));
+    return true;
+}
+
 void usb_midi_flush_tx(void) {
-    if (!s_usb_configured || s_tx_tail == s_tx_head) {
+    if (!s_usb_configured) {
         return;
     }
 
     if ((*USB_EP_REG(USB_EP1) & USB_EP_TX_STAT) == USB_EP_TX_STAT_VALID) {
+        return;
+    }
+
+    if (s_active_profile == USB_PROFILE_MONOME_FTDI) {
+        if (s_ser_tx_tail == s_ser_tx_head) {
+            return;
+        }
+        uint8_t pkt[64];
+        pkt[0] = FTDI_MODEM_STATUS_B0;
+        pkt[1] = FTDI_MODEM_STATUS_B1;
+        uint16_t offset = 2U;
+
+        while (s_ser_tx_tail != s_ser_tx_head && offset < 64U) {
+            pkt[offset++] = s_ser_tx_ring[s_ser_tx_tail];
+            s_ser_tx_tail = (uint8_t)((s_ser_tx_tail + 1U) & (USB_SER_TX_RING_LEN - 1U));
+        }
+
+        usb_midi_ep1_write(pkt, offset);
+        return;
+    }
+
+    if (s_tx_tail == s_tx_head) {
         return;
     }
 
