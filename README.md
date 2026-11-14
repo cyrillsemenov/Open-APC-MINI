@@ -62,3 +62,9 @@ If you build, adapt, or port this firmware for **any custom PCB, clone, or non-A
         USB_STRING_VENDOR="your-domain.org" \
         USB_STRING_PRODUCT="Custom Grid Controller"
    ```
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE) (with third-party notices for the STMicroelectronics `STM32F10x_StdPeriph_Driver` / `STM32_USB-FS-Device_Driver` and ARM CMSIS libraries included in [LICENSE](LICENSE)).
