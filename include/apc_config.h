@@ -71,10 +71,8 @@
  *---------------------------------------------------------------------------*/
 #define APC_FADER_COUNT        9U
 #define APC_ADC_WINDOW_SAMPLES 3U
-#define APC_ADC_TRIGGER_DELTA  26U
 #define APC_ADC_OUTLIER_DELTA  0x00FFU
-#define APC_ADC_ZERO_CLAMP     8U
-#define APC_ADC_FULL_CLAMP     0x0FF7U
-#define APC_ADC_ZERO_MAX       3U
-#define APC_ADC_FULL_MIN       0x0FFDU
-#define APC_ADC_SCALE_SPAN     0x0FFA
+#define APC_ADC_ZERO_MAX       24U
+#define APC_ADC_FULL_MIN       4071U
+#define APC_ADC_SCALE_SPAN     (APC_ADC_FULL_MIN - APC_ADC_ZERO_MAX)
+#define APC_ADC_HYSTERESIS     12U

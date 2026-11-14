@@ -811,7 +811,44 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         60 <= cc_map.get(0x38, 0) <= 65,
         f"Expected Master Fader CC 0x38 in 60..65, got {cc_map}",
     )
-    ok("ADC1+DMA1 9-fader filter", f"CC 0x30={cc_map[0x30]}, CC 0x38={cc_map[0x38]}")
+
+    # Verify top-stop noise spikes do NOT bounce 127 -> 126, while genuine move hits 126
+    spike_events: list[bytes] = []
+    for sample in (4092, 4058, 4091, 4093, 4059, 4090, 4094, 4057, 4092, 4060, 4093):
+        mcu.fader_adc[0] = sample
+        mcu._run_adc1_dma()
+        mcu.run_steps(10_000)
+        spike_events.extend(mcu.usb_poll_ep1_in())
+
+    spurious_f0 = [
+        pkt[i + 3]
+        for pkt in spike_events
+        for i in range(0, len(pkt), 4)
+        if pkt[i : i + 3] == bytes([0x0B, 0xB0, 0x30])
+    ]
+    check(
+        not spurious_f0,
+        f"Spurious Fader 1 CC bounce at top stop under noise spikes: {spurious_f0}",
+    )
+
+    step_down_events: list[bytes] = []
+    for _ in range(3):
+        mcu.fader_adc[0] = 4035
+        mcu._run_adc1_dma()
+        mcu.run_steps(10_000)
+        step_down_events.extend(mcu.usb_poll_ep1_in())
+
+    step_down_f0 = [
+        pkt[i + 3]
+        for pkt in step_down_events
+        for i in range(0, len(pkt), 4)
+        if pkt[i : i + 3] == bytes([0x0B, 0xB0, 0x30])
+    ]
+    check(
+        step_down_f0 == [126],
+        f"Expected clean step-down from 127 to [126], got {step_down_f0}",
+    )
+    ok("ADC1+DMA1 9-fader filter", f"CC 0x30=127 (no spike bounce, clean ->126), CC 0x38={cc_map[0x38]}")
 
     # 8. LED Control: TM1629 SPI Bit-Bang & Multiplexed Round LEDs
     mcu.tm_frames.clear()
