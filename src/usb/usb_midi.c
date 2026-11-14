@@ -1,0 +1,275 @@
+#include <stddef.h>
+#include <libopencm3/cm3/nvic.h>
+#include <libopencm3/stm32/rcc.h>
+#include <libopencm3/stm32/st_usbfs.h>
+#include <libopencm3/usb/usbd.h>
+#include "apc_protocol.h"
+#include "board.h"
+#include "bootloader.h"
+#include "usb_desc.h"
+#include "usb_midi.h"
+
+#define USB_MIDI_TX_RING_LEN 128U // 128 x 4B = 512 B
+#define USB_MIDI_RX_RING_LEN 64U  // 64 x 4B  = 256 B
+#define USB_MIDI_SYSEX_MAX   64U  // Max assembled SysEx length (largest APC msg is 24 B)
+
+static usbd_device *s_usbd_dev = NULL;
+static uint8_t s_usbd_ctrl_buf[128];
+static volatile bool s_usb_configured = false;
+
+static uint8_t s_tx_ring[USB_MIDI_TX_RING_LEN][4];
+static uint8_t s_tx_head = 0;
+static uint8_t s_tx_tail = 0;
+
+static uint8_t s_rx_ring[USB_MIDI_RX_RING_LEN][4];
+static volatile uint8_t s_rx_head = 0;
+static uint8_t s_rx_tail = 0;
+
+static uint8_t s_sysex_buf[USB_MIDI_SYSEX_MAX];
+static uint16_t s_sysex_len = 0;
+static bool s_sysex_active = false;
+
+static void rx_ring_push_isr(const uint8_t ev[4]) {
+    uint8_t next = (uint8_t)((s_rx_head + 1U) & (USB_MIDI_RX_RING_LEN - 1U));
+    if (next == s_rx_tail) {
+        return;
+    }
+    s_rx_ring[s_rx_head][0] = ev[0];
+    s_rx_ring[s_rx_head][1] = ev[1];
+    s_rx_ring[s_rx_head][2] = ev[2];
+    s_rx_ring[s_rx_head][3] = ev[3];
+    s_rx_head = next;
+}
+
+static void usb_ep1_out_cb(usbd_device *usbd_dev, uint8_t ep) {
+    uint8_t pkt[64];
+    uint16_t len = usbd_ep_read_packet(usbd_dev, ep, pkt, sizeof(pkt));
+
+    for (uint16_t i = len; i < sizeof(pkt); i++) {
+        pkt[i] = 0;
+    }
+
+    bootloader_check_unlock_packet(pkt);
+
+    for (uint16_t off = 0; (off + 4U) <= len; off += 4U) {
+        uint8_t cin = (uint8_t)(pkt[off] & 0x0FU);
+        if (cin == USB_MIDI_CIN_MISC) {
+            break;
+        }
+        rx_ring_push_isr(&pkt[off]);
+    }
+}
+
+static void usb_ep1_in_cb(usbd_device *usbd_dev, uint8_t ep) {
+    (void)usbd_dev;
+    (void)ep;
+}
+
+static void usb_set_config_cb(usbd_device *usbd_dev, uint16_t wValue) {
+    if (wValue == 0) {
+        s_usb_configured = false;
+        return;
+    }
+
+    usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_out_cb);
+    usbd_ep_setup(usbd_dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_in_cb);
+    s_usb_configured = true;
+}
+
+static void usb_reset_cb(void) {
+    s_usb_configured = false;
+}
+
+static void sysex_append_bytes(const uint8_t *bytes, uint8_t count) {
+    for (uint8_t i = 0; i < count; i++) {
+        uint8_t b = bytes[i];
+        if (b == MIDI_STATUS_SYSEX_START) {
+            s_sysex_len = 0;
+            s_sysex_active = true;
+        }
+        if (!s_sysex_active) {
+            continue;
+        }
+        if (s_sysex_len >= USB_MIDI_SYSEX_MAX) {
+            s_sysex_active = false;
+            s_sysex_len = 0;
+            return;
+        }
+        s_sysex_buf[s_sysex_len++] = b;
+    }
+}
+
+void usb_midi_init(void) {
+    s_usb_configured = false;
+    s_tx_head = 0;
+    s_tx_tail = 0;
+    s_rx_head = 0;
+    s_rx_tail = 0;
+    s_sysex_len = 0;
+    s_sysex_active = false;
+
+    rcc_periph_clock_enable(RCC_USB);
+    nvic_enable_irq(NVIC_USB_LP_CAN_RX0_IRQ);
+
+    s_usbd_dev = usbd_init(&st_usbfs_v1_usb_driver, &usb_dev_desc, &usb_config_desc, usb_strings,
+                           USB_NUM_STRINGS, s_usbd_ctrl_buf, sizeof(s_usbd_ctrl_buf));
+
+    usbd_register_set_config_callback(s_usbd_dev, usb_set_config_cb);
+    usbd_register_reset_callback(s_usbd_dev, usb_reset_cb);
+
+    board_usb_dp_pullup(true);
+}
+
+void usb_midi_poll_isr(void) {
+    if (s_usbd_dev != NULL) {
+        usbd_poll(s_usbd_dev);
+    }
+}
+
+bool usb_midi_is_configured(void) {
+    return s_usb_configured;
+}
+
+uint16_t usb_midi_ep1_write(const uint8_t *buf, uint16_t len) {
+    if (s_usbd_dev == NULL) {
+        return 0;
+    }
+    return usbd_ep_write_packet(s_usbd_dev, 0x81, buf, len);
+}
+
+bool usb_midi_send_event(uint8_t cin, uint8_t b1, uint8_t b2, uint8_t b3) {
+    uint8_t next = (uint8_t)((s_tx_head + 1U) & (USB_MIDI_TX_RING_LEN - 1U));
+    if (next == s_tx_tail) {
+        return false;
+    }
+    s_tx_ring[s_tx_head][0] = (uint8_t)(cin & 0x0FU);
+    s_tx_ring[s_tx_head][1] = b1;
+    s_tx_ring[s_tx_head][2] = b2;
+    s_tx_ring[s_tx_head][3] = b3;
+    s_tx_head = next;
+    return true;
+}
+
+bool usb_midi_send_sysex(const uint8_t *data, uint16_t len) {
+    if (data == NULL || len < 2U) {
+        return false;
+    }
+
+    uint16_t off = 0;
+    while ((off + 3U) < len) {
+        if (!usb_midi_send_event(USB_MIDI_CIN_SYSEX_START, data[off], data[off + 1U],
+                                 data[off + 2U])) {
+            return false;
+        }
+        off = (uint16_t)(off + 3U);
+    }
+
+    uint16_t rem = (uint16_t)(len - off);
+    if (rem == 1U) {
+        return usb_midi_send_event(USB_MIDI_CIN_SYSEX_END_1B, data[off], 0, 0);
+    }
+    if (rem == 2U) {
+        return usb_midi_send_event(USB_MIDI_CIN_SYSEX_END_2B, data[off], data[off + 1U], 0);
+    }
+    return usb_midi_send_event(USB_MIDI_CIN_SYSEX_END_3B, data[off], data[off + 1U],
+                               data[off + 2U]);
+}
+
+void usb_midi_flush_tx(void) {
+    if (!s_usb_configured || s_tx_tail == s_tx_head) {
+        return;
+    }
+
+    if ((*USB_EP_REG(USB_EP1) & USB_EP_TX_STAT) == USB_EP_TX_STAT_VALID) {
+        return;
+    }
+
+    uint8_t pkt[64];
+    uint8_t offset = 0;
+
+    while (s_tx_tail != s_tx_head && offset < 64U) {
+        pkt[offset + 0U] = s_tx_ring[s_tx_tail][0];
+        pkt[offset + 1U] = s_tx_ring[s_tx_tail][1];
+        pkt[offset + 2U] = s_tx_ring[s_tx_tail][2];
+        pkt[offset + 3U] = s_tx_ring[s_tx_tail][3];
+        s_tx_tail = (uint8_t)((s_tx_tail + 1U) & (USB_MIDI_TX_RING_LEN - 1U));
+        offset = (uint8_t)(offset + 4U);
+    }
+
+    while (offset < 64U) {
+        pkt[offset++] = 0;
+    }
+
+    usb_midi_ep1_write(pkt, sizeof(pkt));
+}
+
+void usb_midi_poll_rx(usb_midi_channel_cb_t on_channel_msg, usb_midi_sysex_cb_t on_sysex_msg) {
+    while (s_rx_tail != s_rx_head) {
+        uint8_t ev[4];
+        ev[0] = s_rx_ring[s_rx_tail][0];
+        ev[1] = s_rx_ring[s_rx_tail][1];
+        ev[2] = s_rx_ring[s_rx_tail][2];
+        ev[3] = s_rx_ring[s_rx_tail][3];
+        s_rx_tail = (uint8_t)((s_rx_tail + 1U) & (USB_MIDI_RX_RING_LEN - 1U));
+
+        uint8_t cin = (uint8_t)(ev[0] & 0x0FU);
+        switch (cin) {
+        case USB_MIDI_CIN_SYSEX_START:
+            sysex_append_bytes(&ev[1], 3U);
+            break;
+
+        case USB_MIDI_CIN_SYSEX_END_1B:
+        case USB_MIDI_CIN_SYSEX_END_2B:
+        case USB_MIDI_CIN_SYSEX_END_3B: {
+            uint8_t n = (uint8_t)(cin - 4U);
+            sysex_append_bytes(&ev[1], n);
+            if (s_sysex_active && s_sysex_len >= 2U &&
+                s_sysex_buf[s_sysex_len - 1U] == MIDI_STATUS_SYSEX_END) {
+                if (on_sysex_msg != NULL) {
+                    on_sysex_msg(s_sysex_buf, s_sysex_len);
+                }
+            }
+            s_sysex_active = false;
+            s_sysex_len = 0;
+            break;
+        }
+
+        case USB_MIDI_CIN_NOTE_OFF:
+        case USB_MIDI_CIN_NOTE_ON:
+        case USB_MIDI_CIN_POLY_KEYPRESS:
+        case USB_MIDI_CIN_CONTROL_CHANGE:
+        case USB_MIDI_CIN_PITCH_BEND:
+            s_sysex_active = false;
+            s_sysex_len = 0;
+            if (on_channel_msg != NULL) {
+                on_channel_msg(ev[1], ev[2], ev[3]);
+            }
+            break;
+
+        case USB_MIDI_CIN_PROGRAM_CHANGE:
+        case USB_MIDI_CIN_CHAN_PRESSURE:
+            s_sysex_active = false;
+            s_sysex_len = 0;
+            if (on_channel_msg != NULL) {
+                on_channel_msg(ev[1], ev[2], 0);
+            }
+            break;
+
+        case USB_MIDI_CIN_SINGLE_BYTE:
+            if (ev[1] < MIDI_STATUS_REALTIME_MIN) {
+                sysex_append_bytes(&ev[1], 1U);
+                if (s_sysex_active && ev[1] == MIDI_STATUS_SYSEX_END) {
+                    if (on_sysex_msg != NULL) {
+                        on_sysex_msg(s_sysex_buf, s_sysex_len);
+                    }
+                    s_sysex_active = false;
+                    s_sysex_len = 0;
+                }
+            }
+            break;
+
+        default:
+            break;
+        }
+    }
+}
