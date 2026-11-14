@@ -1,13 +1,12 @@
 PROJECT       := apc_mini
-BUILD_DIR     := build
-STOCK_IMAGE   := reverse_engineering/AkaiAPC_1.bin
+BUILD_DIR     ?= build
 
 CROSS_COMPILE ?= arm-none-eabi-
 CC            := $(CROSS_COMPILE)gcc
 OBJCOPY       := $(CROSS_COMPILE)objcopy
 OBJDUMP       := $(CROSS_COMPILE)objdump
 SIZE          := $(CROSS_COMPILE)size
-HOST_CC       ?= cc
+UV            ?= uv
 
 STDPERIPH_DIR := lib/STM32F10x_StdPeriph_Lib/Libraries
 CMSIS_CORE    := $(STDPERIPH_DIR)/CMSIS/CM3/CoreSupport
@@ -127,48 +126,50 @@ OBJS := \
 	$(patsubst $(STDPERIPH_SRC)/%.c,$(BUILD_DIR)/stdperiph/%.o,$(STDPERIPH_SRCS)) \
 	$(patsubst $(USB_DRV_SRC)/%.c,$(BUILD_DIR)/usb/%.o,$(USB_SRCS))
 
-HOST_TOOL     := $(BUILD_DIR)/firmware_tool
 APP_ELF       := $(BUILD_DIR)/$(PROJECT)_app.elf
 APP_RAW_BIN   := $(BUILD_DIR)/$(PROJECT)_app_raw.bin
 APP_BIN       := $(BUILD_DIR)/$(PROJECT)_app.bin
-FULL_30K_BIN  := $(BUILD_DIR)/$(PROJECT)_full_30k.bin
-FULL_128K_BIN := $(BUILD_DIR)/$(PROJECT)_full.bin
+APP_SYX       := $(BUILD_DIR)/$(PROJECT)_app.syx
 
-.PHONY: all verify disasm clean
+.PHONY: all sysex verify validate test-validator flash disasm clean
 
-all: $(APP_BIN) $(FULL_30K_BIN) $(FULL_128K_BIN)
+all: $(APP_BIN) $(APP_SYX)
+
+sysex: $(APP_SYX)
 
 $(BUILD_DIR)/app/%.o: src/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/stdperiph/%.o: $(STDPERIPH_SRC)/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/usb/%.o: $(USB_DRV_SRC)/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) -c $< -o $@
 
-$(APP_ELF): $(OBJS) ld/stm32f102rb_app.ld
-	$(CC) $(OBJS) $(LDFLAGS) -o $@
+$(APP_ELF): $(OBJS) $(EXTRA_OBJS) ld/stm32f102rb_app.ld
+	$(CC) $(OBJS) $(EXTRA_OBJS) $(LDFLAGS) $(EXTRA_LDFLAGS) -o $@
 	$(SIZE) $@
 
 $(APP_RAW_BIN): $(APP_ELF)
 	$(OBJCOPY) -O binary $< $@
 
-$(HOST_TOOL): tools/firmware_tool.c
-	@mkdir -p $(BUILD_DIR)
-	$(HOST_CC) -std=c11 -O2 -Wall -Wextra $< -o $@
+$(APP_BIN): $(APP_RAW_BIN) tools/stamp_fw.py
+	$(UV) run stamp_fw $(APP_RAW_BIN) $(APP_BIN)
 
-$(APP_BIN): $(APP_RAW_BIN) $(HOST_TOOL) $(STOCK_IMAGE)
-	$(HOST_TOOL) stamp $(APP_RAW_BIN) $(APP_BIN) --match-stock-sum $(STOCK_IMAGE)
+$(APP_SYX): $(APP_BIN) tools/bin_to_sysex.py
+	$(UV) run bin_to_sysex $(APP_BIN) $(APP_SYX)
 
-$(FULL_30K_BIN) $(FULL_128K_BIN): $(APP_BIN) $(HOST_TOOL) $(STOCK_IMAGE)
-	$(HOST_TOOL) combine $(STOCK_IMAGE) $(APP_BIN) $(FULL_30K_BIN) $(FULL_128K_BIN)
+verify validate: $(APP_BIN) $(APP_SYX)
+	$(UV) run validate_fw $(APP_BIN)
 
-verify: all
-	$(HOST_TOOL) verify $(STOCK_IMAGE) $(APP_BIN) $(FULL_30K_BIN) $(FULL_128K_BIN)
+test-validator: $(APP_BIN) $(APP_SYX)
+	$(UV) run test_validator
+
+flash: $(APP_SYX)
+	$(UV) run fw_updater $(APP_SYX)
 
 disasm: $(APP_ELF)
 	$(OBJDUMP) -d -S $(APP_ELF) > $(BUILD_DIR)/$(PROJECT)_app.lst

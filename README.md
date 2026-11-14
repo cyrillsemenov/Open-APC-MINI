@@ -55,7 +55,11 @@ Faithful, pure-C11 reconstruction of the factory **Akai Professional APC Mini (`
 │   ├── usb_midi_io.c            # Dual 256B TX queues, 512B RX ring, MIDI/SysEx parser, DFU unlock
 │   └── main.c                   # Stock main loop & startup sequence
 └── tools/
-    └── firmware_tool.c          # Pure-C11 host tool for checksum stamping, combining & verification
+    ├── bin_to_sysex.py          # Converts stamped 22,528 B .bin <-> bootloader MIDI SysEx (.syx)
+    ├── fw_updater_midi.py       # USB-MIDI SysEx firmware updater (.syx or .bin) for APC Mini
+    ├── stamp_fw.py              # Pads raw binary to 22,528 B and stamps 0x080077FE checksum
+    ├── validate_fw.py           # Unicorn Cortex-M3 STM32F102RB hardware & protocol validator
+    └── test_validator.py        # Fault-injection test suite verifying broken firmwares are caught
 ```
 
 ---
@@ -64,15 +68,21 @@ Faithful, pure-C11 reconstruction of the factory **Akai Professional APC Mini (`
 
 ### Prerequisites
 - `arm-none-eabi-gcc`, `arm-none-eabi-objcopy`, `arm-none-eabi-size`
-- Host C11 compiler (`cc` / `clang` / `gcc`)
+- [`uv`](https://docs.astral.sh/uv/) (`uv sync` installs `unicorn`, `mido`, `python-rtmidi`)
 
 ### Commands
 ```sh
-# Build application binary, combined 30 KB image, and full 128 KB SWD image:
+# Build stamped 22,528-byte .bin and bootloader MIDI SysEx .syx:
 make all
 
-# Run side-by-side verification against reverse_engineering/AkaiAPC_1.bin:
+# Convert an arbitrary stamped .bin to .syx manually (e.g. in CI/CD):
+uv run bin_to_sysex build/apc_mini_app.bin build/apc_mini_app.syx
+
+# Emulate STM32F102RB hardware in Unicorn and validate firmware behavior:
 make verify
+
+# Compile fault-injected broken firmwares and verify the validator catches all of them:
+make test-validator
 ```
 
 ### USB Identity & Legal Disclaimer
@@ -93,7 +103,6 @@ The default USB `VID:PID` (`0x09E8:0x0028`), manufacturer string (`"AKAI PROFESS
 >    ```
 
 ### Build Outputs
-- `build/apc_mini_app.elf` — Linked ELF at `0x08002000` (`12,520` B `.text`, `196` B `.data`, `4,248` B `.bss`).
-- `build/apc_mini_app.bin` — Stamped `22,528`-byte application image (`0x08002000..0x080077FF`) ready for the `"APC MINI Updater"` bootloader, with checksum `0xAB4B` at `+0x57FE` (`0x080077FE`).
-- `build/apc_mini_full_30k.bin` — Combined `30,720`-byte image (`0x08000000..0x080077FF`, trailing `0xFF` stripped) containing the 8 KB `"APC MINI Updater"` bootloader + 22.5 KB stamped application.
-- `build/apc_mini_full.bin` — Full `131,072`-byte (128 KB) SWD Flash image (`0x08000000..0x0801FFFF`) matching the layout, size, and checksums of `reverse_engineering/AkaiAPC_1.bin`.
+- `build/apc_mini_app.elf` — Linked ELF at `0x08002000`.
+- `build/apc_mini_app.bin` — Stamped `22,528`-byte application image (`0x08002000..0x080077FF`) ready for the `"APC MINI Updater"` bootloader, with two's-complement checksum at `+0x57FE` (`0x080077FE`).
+- `build/apc_mini_app.syx` — Pre-encoded bootloader MIDI SysEx image (`2,839` `F0 ... F7` messages, `135,904` B) ready for `fw_updater_midi`, CI/CD release artifacts, and WebMIDI updaters.
