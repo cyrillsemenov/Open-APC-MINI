@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>APC Mini — WebMIDI Firmware Updater</title>
+        <link href="style.css" rel="stylesheet" />
+    </head>
+    <body>
+        <div class="container">
+            <header>
+                <div class="brand">
+                    <div class="pad-grid-icon" aria-hidden="true">
+                        <span></span><span></span><span></span> <span></span
+                        ><span></span><span></span> <span></span><span></span
+                        ><span></span>
+                    </div>
+                    <div>
+                        <h1>APC Mini Firmware Updater</h1>
+                        <p class="subtitle">
+                            STM32F102RBT6 USB-MIDI Bootloader SysEx Flasher
+                        </p>
+                    </div>
+                </div>
+                <div class="badge" id="midiStatusBadge">
+                    <span class="dot" id="midiStatusDot"></span>
+                    <span id="midiStatusText">WebMIDI Disconnected</span>
+                </div>
+            </header>
+
+            <!-- 1. MIDI Device Connection -->
+            <section class="card">
+                <div class="card-title">
+                    <span>1. USB-MIDI Connection</span>
+                    <span
+                        id="deviceModeLabel"
+                        style="font-family: var(--mono); font-size: 0.78rem"
+                    ></span>
+                </div>
+                <div class="row">
+                    <div>
+                        <label for="midiOutSelect">MIDI Output Port</label>
+                        <select id="midiOutSelect" disabled>
+                            <option value="">
+                                Click "Connect WebMIDI" first...
+                            </option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="midiInSelect">MIDI Input Port</label>
+                        <select id="midiInSelect" disabled>
+                            <option value="">
+                                Click "Connect WebMIDI" first...
+                            </option>
+                        </select>
+                    </div>
+                </div>
+                <div class="btn-row">
+                    <button id="btnConnectMidi" type="button">
+                        Connect WebMIDI
+                    </button>
+                    <button id="btnProbeDevice" type="button" disabled>
+                        Check Device Status
+                    </button>
+                </div>
+            </section>
+
+            <!-- 2. Firmware Version Selection -->
+            <section class="card">
+                <div class="card-title">
+                    <span>2. Firmware Image</span>
+                    <span
+                        id="fwSourceBadge"
+                        style="font-family: var(--mono); font-size: 0.78rem"
+                        >Loading manifest...</span
+                    >
+                </div>
+                <div>
+                    <label for="versionSelect"
+                        >Select Release Version or Local File</label
+                    >
+                    <select id="versionSelect">
+                        <option value="__local__">
+                            Custom local file (.syx or .bin)...
+                        </option>
+                    </select>
+                </div>
+
+                <div id="localFileZone" class="dropzone hidden">
+                    <input
+                        type="file"
+                        id="fileInput"
+                        accept=".syx,.bin"
+                        class="hidden"
+                    />
+                    <span id="dropzonePrompt"
+                        >Click or drag &amp; drop a stamped
+                        <strong>.bin</strong> (22,528 B) or bootloader
+                        <strong>.syx</strong> file here</span
+                    >
+                </div>
+
+                <div class="meta-grid" id="fwMetaGrid">
+                    <div class="meta-item">
+                        <span>Version / Source</span>
+                        <strong id="metaVersion">—</strong>
+                    </div>
+                    <div class="meta-item">
+                        <span>App Size</span>
+                        <strong id="metaSize">—</strong>
+                    </div>
+                    <div class="meta-item">
+                        <span>Bootloader Checksum</span>
+                        <strong id="metaChecksum">—</strong>
+                    </div>
+                    <div class="meta-item">
+                        <span>SysEx Steps</span>
+                        <strong id="metaSteps">—</strong>
+                    </div>
+                </div>
+
+                <div class="btn-row">
+                    <button id="btnDownloadSyx" type="button" disabled>
+                        Download .syx
+                    </button>
+                    <button id="btnDownloadBin" type="button" disabled>
+                        Download .bin
+                    </button>
+                </div>
+            </section>
+
+            <!-- 3. Flash Action & Progress -->
+            <section class="card">
+                <div class="card-title">
+                    <span>3. Flash Firmware</span>
+                    <span
+                        id="flashStateLabel"
+                        style="font-family: var(--mono); font-size: 0.78rem"
+                        >Idle</span
+                    >
+                </div>
+                <div class="btn-row" style="margin-top: 0">
+                    <button
+                        id="btnFlash"
+                        class="primary"
+                        type="button"
+                        disabled
+                    >
+                        Update APC Mini Firmware
+                    </button>
+                </div>
+                <div class="progress-wrap">
+                    <div class="progress-bar-outer">
+                        <div class="progress-bar-inner" id="progressBar"></div>
+                    </div>
+                    <div class="progress-stats">
+                        <span id="progressPageText">Page 0 / 22</span>
+                        <span id="progressAddrText">0x08002000</span>
+                        <span id="progressPctText">0%</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 4. Console Log -->
+            <section class="card">
+                <div class="card-title">
+                    <span>Protocol Log</span>
+                    <button
+                        id="btnClearLog"
+                        type="button"
+                        style="padding: 3px 8px; font-size: 0.75rem"
+                    >
+                        Clear
+                    </button>
+                </div>
+                <div class="log-box" id="logBox"></div>
+            </section>
+        </div>
+
+        <script type="module" src="updater.js"></script>
+    </body>
+</html>

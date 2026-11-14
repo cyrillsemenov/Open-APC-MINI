@@ -54,12 +54,15 @@ Faithful, pure-C11 reconstruction of the factory **Akai Professional APC Mini (`
 │   ├── buttons_faders.c         # 9x2 button matrix scan (20 ticks) + 9-fader ADC filter & hysteresis
 │   ├── usb_midi_io.c            # Dual 256B TX queues, 512B RX ring, MIDI/SysEx parser, DFU unlock
 │   └── main.c                   # Stock main loop & startup sequence
-└── tools/
-    ├── bin_to_sysex.py          # Converts stamped 22,528 B .bin <-> bootloader MIDI SysEx (.syx)
-    ├── fw_updater_midi.py       # USB-MIDI SysEx firmware updater (.syx or .bin) for APC Mini
-    ├── stamp_fw.py              # Pads raw binary to 22,528 B and stamps 0x080077FE checksum
-    ├── validate_fw.py           # Unicorn Cortex-M3 STM32F102RB hardware & protocol validator
-    └── test_validator.py        # Fault-injection test suite verifying broken firmwares are caught
+├── tools/
+│   ├── bin_to_sysex.py          # Converts stamped 22,528 B .bin <-> bootloader MIDI SysEx (.syx)
+│   ├── build_web_manifest.py    # Bundles web/index.html + release .syx/.bin assets & manifest.json
+│   ├── fw_updater.py            # USB-MIDI SysEx firmware updater (.syx or .bin) for APC Mini
+│   ├── stamp_fw.py              # Pads raw binary to 22,528 B and stamps 0x080077FE checksum
+│   ├── validate_fw.py           # Unicorn Cortex-M3 STM32F102RB hardware & protocol validator
+│   └── test_validator.py        # Fault-injection test suite verifying broken firmwares are caught
+└── web/
+    └── index.html               # Zero-dependency single-page WebMIDI firmware updater
 ```
 
 ---
@@ -83,6 +86,9 @@ make verify
 
 # Compile fault-injected broken firmwares and verify the validator catches all of them:
 make test-validator
+
+# Stage and serve the WebMIDI firmware updater locally at http://localhost:8000:
+make serve-web
 ```
 
 ### USB Identity & Legal Disclaimer

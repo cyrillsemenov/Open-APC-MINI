@@ -130,8 +130,10 @@ APP_ELF       := $(BUILD_DIR)/$(PROJECT)_app.elf
 APP_RAW_BIN   := $(BUILD_DIR)/$(PROJECT)_app_raw.bin
 APP_BIN       := $(BUILD_DIR)/$(PROJECT)_app.bin
 APP_SYX       := $(BUILD_DIR)/$(PROJECT)_app.syx
+WEB_DIST_DIR  := $(BUILD_DIR)/web
+WEB_PORT      ?= 8000
 
-.PHONY: all sysex verify validate test-validator flash disasm clean
+.PHONY: all sysex verify validate test-validator flash web-dist serve-web disasm clean
 
 all: $(APP_BIN) $(APP_SYX)
 
@@ -170,6 +172,13 @@ test-validator: $(APP_BIN) $(APP_SYX)
 
 flash: $(APP_SYX)
 	$(UV) run fw_updater $(APP_SYX)
+
+web-dist: $(APP_BIN) $(APP_SYX) web/index.html tools/build_web_manifest.py
+	$(UV) run build_web_manifest --web-src web --out-dir $(WEB_DIST_DIR) --bin $(APP_BIN) --syx $(APP_SYX)
+
+serve-web: web-dist
+	@echo "Opening WebMIDI Updater at http://localhost:$(WEB_PORT) (localhost is a W3C Secure Context)"
+	python3 -m http.server --bind 127.0.0.1 -d $(WEB_DIST_DIR) $(WEB_PORT)
 
 disasm: $(APP_ELF)
 	$(OBJDUMP) -d -S $(APP_ELF) > $(BUILD_DIR)/$(PROJECT)_app.lst
