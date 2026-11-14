@@ -4,9 +4,10 @@ CompileFlags:
     - -DSTM32F1
     - -Iinclude
     - -Isrc
-    - -Isrc/board
     - -Isrc/platform
+    - -Isrc/drivers
     - -Isrc/usb
+    - -Isrc/protocol
     - -Ilib/libopencm3/include
 Diagnostics:
   UnusedIncludes: None

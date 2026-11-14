@@ -1,22 +1,28 @@
 #include <libopencm3/stm32/iwdg.h>
-#include "hw_config.h"
-#include "apc_mini.h"
+#include "apc_mode.h"
+#include "board.h"
+#include "buttons.h"
+#include "faders.h"
+#include "leds.h"
+#include "usb_midi.h"
 
 int main(void) {
-    hw_init();
-    periph_app_init();
-    iwdg_init();
+    board_init();
+    usb_midi_init();
+    apc_mode_init();
+    leds_init();
+    buttons_init();
+    faders_init();
+    board_watchdog_init();
 
     while (1) {
         iwdg_reset();
-        mux_round_leds();
-        scan_buttons();
-        kick_adc();
-        report_buttons();
-        report_faders();
-        usb_midi_poll_rx();
-        blink_refresh();
-        process_led_q();
+
+        uint32_t now = board_ticks();
+        buttons_task(now, apc_mode_on_button);
+        faders_task(apc_mode_on_fader);
+        apc_mode_poll_rx(now);
+        leds_task(now);
         usb_midi_flush_tx();
     }
 }

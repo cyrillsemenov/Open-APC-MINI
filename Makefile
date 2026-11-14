@@ -15,9 +15,10 @@ OPENCM3_LIB   := $(OPENCM3_DIR)/lib/libopencm3_stm32f1.a
 INCLUDES := \
 	-Iinclude \
 	-Isrc \
-	-Isrc/board \
 	-Isrc/platform \
+	-Isrc/drivers \
 	-Isrc/usb \
+	-Isrc/protocol \
 	-I$(OPENCM3_DIR)/include
 
 # -----------------------------------------------------------------------------
@@ -109,12 +110,16 @@ LDLIBS := \
 APP_SRCS := \
 	src/main.c \
 	src/platform/isr.c \
-	src/board/hw_config.c \
-	src/board/leds_tm1629.c \
-	src/board/buttons_faders.c \
+	src/platform/board.c \
+	src/platform/bootloader.c \
+	src/drivers/tm1629.c \
+	src/drivers/leds.c \
+	src/drivers/buttons.c \
+	src/drivers/faders.c \
 	src/usb/usb_desc.c \
-	src/usb/usb_endp.c \
-	src/usb/usb_midi_io.c
+	src/usb/usb_midi.c \
+	src/protocol/sysex.c \
+	src/protocol/apc_mode.c
 
 OBJS := $(patsubst src/%.c,$(BUILD_DIR)/obj/%.o,$(APP_SRCS))
 
