@@ -23,9 +23,9 @@
                     </div>
                 </div>
                 <div class="header-right">
-                    <a class="nav-link" href="index.html"
-                        >&larr; Back to Updater</a
-                    >
+                    <a class="nav-link" href="index.html">
+                        &larr; Back to Updater
+                    </a>
                 </div>
             </header>
 
@@ -55,7 +55,8 @@
                         href="https://github.com/CTXz/stm32f1-picopwner"
                         target="_blank"
                         rel="noopener"
-                        >CTXz/stm32f1-picopwner</a
+                    >
+                        CTXz/stm32f1-picopwner </a
                     >. I connected all needed wires to an RPi Pico and dumped
                     the firmware.
                 </p>
@@ -71,9 +72,17 @@
                 <p>
                     The circuit of the APC Mini is remarkably simple: just an
                     <code>STM32F102RBT6</code> MCU and a <code>TM1629</code> LED
-                    driver. So my first goal was to recreate the stock firmware
-                    using the ST Standard Peripheral and USB-FS Device libraries
-                    and apply a couple of key fixes.
+                    driver. After initially reconstructing the stock firmware to
+                    understand every detail of the board and protocol, the
+                    firmware now runs on the open-source
+                    <a
+                        href="https://github.com/libopencm3/libopencm3"
+                        target="_blank"
+                        rel="noopener"
+                    >
+                        libopencm3
+                    </a>
+                    peripheral and USB-MIDI stack with key fixes applied.
                 </p>
             </section>
 
@@ -88,12 +97,11 @@
                         this firmware — the MCU pulls the USB D+ pull-up
                         (<code>PA8</code>) low, forces USB re-enumeration, and
                         resets directly into the bootloader.
-                        <em
-                            >(Note: if you are updating from the original
-                            factory firmware for the very first time, you will
-                            need to unplug and replug the USB cable once when
-                            prompted.)</em
-                        >
+                        <em>
+                            (Note: if you are updating from the original factory
+                            firmware for the very first time, you will need to
+                            unplug and replug the USB cable once when prompted.)
+                        </em>
                     </li>
                     <li>
                         <strong>Smooth Slider / Fader Filtering:</strong> On
@@ -116,8 +124,9 @@
                             href="https://github.com/monome/serialosc"
                             target="_blank"
                             rel="noopener"
-                            >monome/serialosc</a
                         >
+                            monome/serialosc
+                        </a>
                         compatibility
                     </li>
                     <li>
@@ -134,7 +143,9 @@
 
             <section class="card prose">
                 <div class="card-title">
-                    <span>Important Notice for Custom Hardware &amp; License</span>
+                    <span>
+                        Important Notice for Custom Hardware &amp; License
+                    </span>
                 </div>
                 <p>
                     The default USB
@@ -149,11 +160,17 @@
                     >).
                 </p>
                 <p>
-                    This project's original firmware reconstruction, tools, and
-                    WebMIDI updater are released under the
-                    <strong>MIT License</strong> (with third-party notices for
-                    STMicroelectronics <code>STM32F10x_StdPeriph_Driver</code>,
-                    <code>STM32_USB-FS-Device_Driver</code>, and ARM CMSIS).
+                    This project's original firmware, tools, and WebMIDI updater
+                    are released under the <strong>MIT License</strong> (linking
+                    against
+                    <a
+                        href="https://github.com/libopencm3/libopencm3"
+                        target="_blank"
+                        rel="noopener"
+                    >
+                        libopencm3
+                    </a>
+                    under <code>LGPL-3.0-or-later</code>).
                 </p>
             </section>
         </div>

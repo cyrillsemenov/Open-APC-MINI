@@ -108,6 +108,10 @@ class STM32F102Harness:
         self.uc.mem_map(SRAM_BASE, SRAM_SIZE)
         self.uc.mem_map(PMA_BASE, 0x1000)
 
+        # STM32 System Memory / Electronic Signature (DESIG_FLASH_SIZE = 128 KB at 0x1FFFF7E0)
+        self.uc.mem_map(0x1FFFF000, 0x1000)
+        self.uc.mem_write(0x1FFFF7E0, struct.pack("<H", 128))
+
         # APB1 (before PMA), APB1/APB2/AHB (after PMA), Bit-Band alias, and Cortex-M3 PPB
         self.uc.mmio_map(
             0x40000000,
@@ -268,8 +272,10 @@ class STM32F102Harness:
             self.regs[0x40020000] = isr
             return
 
-        # RCC CR & CFGR (instant HSE/PLL lock + SWS mirror)
+        # RCC CR & CFGR (instant HSI/HSE/PLL lock + SWS mirror)
         if addr == 0x40021000:
+            if val & 0x01:
+                val |= 0x02  # HSIRDY
             if val & (1 << 16):
                 val |= 1 << 17  # HSERDY
             if val & (1 << 24):

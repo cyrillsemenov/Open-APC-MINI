@@ -33,30 +33,30 @@ class BrokenCase:
 BROKEN_CASES: list[BrokenCase] = [
     BrokenCase(
         name="missing_vtor_reloc",
-        wrap_symbol="NVIC_SetVectorTable",
-        c_stub="void __wrap_NVIC_SetVectorTable(unsigned a, unsigned b) { (void)a; (void)b; }",
+        wrap_symbol="relocate_vtor",
+        c_stub="void __wrap_relocate_vtor(void) {}",
         expected_err="SCB->VTOR not relocated",
     ),
     BrokenCase(
         name="wrong_sysclk_no_pll",
-        wrap_symbol="RCC_SYSCLKConfig",
-        c_stub="void __wrap_RCC_SYSCLKConfig(unsigned s) { (void)s; }",
+        wrap_symbol="rcc_clock_setup_pll",
+        c_stub="void __wrap_rcc_clock_setup_pll(const void *c) { (void)c; }",
         expected_err="SYSCLK not switched to PLL",
     ),
     BrokenCase(
         name="no_usb_pullup_pa8",
-        wrap_symbol="PowerOn",
-        c_stub="int __wrap_PowerOn(void) { return 0; }",
+        wrap_symbol="usb_dp_pullup",
+        c_stub="void __wrap_usb_dp_pullup(_Bool e) { (void)e; }",
         expected_err="PA8 (USB D+ pull-up) not driven HIGH",
     ),
     BrokenCase(
         name="watchdog_not_reloaded",
-        wrap_symbol="IWDG_ReloadCounter",
+        wrap_symbol="iwdg_reset",
         c_stub=(
-            "extern void __real_IWDG_ReloadCounter(void);\n"
-            "void __wrap_IWDG_ReloadCounter(void) {\n"
+            "extern void __real_iwdg_reset(void);\n"
+            "void __wrap_iwdg_reset(void) {\n"
             "    static int once = 0;\n"
-            "    if (!once++) __real_IWDG_ReloadCounter();\n"
+            "    if (!once++) __real_iwdg_reset();\n"
             "}\n"
         ),
         expected_err="IWDG watchdog is not reloaded in main loop",
@@ -64,7 +64,7 @@ BROKEN_CASES: list[BrokenCase] = [
     BrokenCase(
         name="cpu_fault_on_init",
         wrap_symbol="periph_app_init",
-        c_stub="extern void HardFault_Handler(void); void __wrap_periph_app_init(void) { HardFault_Handler(); }",
+        c_stub="extern void hard_fault_handler(void); void __wrap_periph_app_init(void) { hard_fault_handler(); }",
         expected_err="CPU entered fault handler",
     ),
     BrokenCase(
@@ -138,6 +138,7 @@ def build_broken_variant(
             str(stub_o),
             "-mcpu=cortex-m3",
             "-mthumb",
+            "-Llib/libopencm3/lib",
             "-Tld/stm32f102rb_app.ld",
             "-nostartfiles",
             "-Wl,--gc-sections",
@@ -146,6 +147,12 @@ def build_broken_variant(
             "--specs=nosys.specs",
             "-o",
             str(elf_path),
+            "-Wl,--start-group",
+            "-lopencm3_stm32f1",
+            "-lc",
+            "-lgcc",
+            "-lnosys",
+            "-Wl,--end-group",
         ],
         check=True,
     )
@@ -162,14 +169,10 @@ def main() -> None:
     if not GOOD_BIN.is_file() or not GOOD_SYX.is_file():
         subprocess.run(["make", "all"], check=True)
 
-    objs = (
-        sorted(str(p) for p in BUILD_DIR.glob("app/**/*.o"))
-        + sorted(str(p) for p in BUILD_DIR.glob("stdperiph/*.o"))
-        + sorted(str(p) for p in BUILD_DIR.glob("usb/*.o"))
-    )
+    objs = sorted(str(p) for p in BUILD_DIR.glob("obj/**/*.o"))
     if not objs:
         print(
-            "error: missing object files in build/; run 'make all' first",
+            "error: missing object files in build/obj/; run 'make all' first",
             file=sys.stderr,
         )
         sys.exit(1)

@@ -1,8 +1,9 @@
+#include <libopencm3/stm32/gpio.h>
 #include "apc_mini.h"
 #include "leds_tm1629.h"
 
-const uint8_t kTmRedRow[8] = {0x00, 0x01, 0x04, 0x05, 0x08, 0x09, 0x0C, 0x0D};
-const uint8_t kTmGreenRow[8] = {0x02, 0x03, 0x06, 0x07, 0x0A, 0x0B, 0x0E, 0x0F};
+const uint8_t k_tm_red_row[8] = {0x00, 0x01, 0x04, 0x05, 0x08, 0x09, 0x0C, 0x0D};
+const uint8_t k_tm_green_row[8] = {0x02, 0x03, 0x06, 0x07, 0x0A, 0x0B, 0x0E, 0x0F};
 
 volatile uint8_t round_mux_idx = 0;
 volatile uint8_t round_gate = 0;
@@ -28,17 +29,17 @@ void tm_send_byte(uint8_t data) {
     volatile uint8_t d;
 
     for (bit = 0; bit < 8; bit++) {
-        GPIOB->ODR &= ~GPIO_Pin_13;
+        gpio_clear(GPIOB, GPIO13);
         for (d = 0; d < 10; d++) {}
 
-        if (data & 0x01) {
-            GPIOB->ODR |= GPIO_Pin_14;
+        if (data & 0x01U) {
+            gpio_set(GPIOB, GPIO14);
         } else {
-            GPIOB->ODR &= ~GPIO_Pin_14;
+            gpio_clear(GPIOB, GPIO14);
         }
         data >>= 1;
 
-        GPIOB->ODR |= GPIO_Pin_13;
+        gpio_set(GPIOB, GPIO13);
         for (d = 0; d < 10; d++) {}
     }
 }
@@ -80,16 +81,22 @@ void set_round_led(uint8_t group, uint8_t bit_idx, uint8_t state) {
 
 void mux_round_leds(void) {
     volatile uint8_t d;
+    uint32_t nib;
 
     if (round_gate != 0) {
         return;
     }
     round_gate = 4;
 
-    GPIOC->ODR &= 0xFFF0U;
-    GPIOC->ODR = (1U << round_mux_idx);
+    // 1. Blank all PC0..PC3 row anodes first (without touching PC5..PC15 button strobes)
+    GPIO_BSRR(GPIOC) = (0x000FUL << 16);
 
-    GPIOB->ODR = (GPIOB->ODR & 0xF0FFU) | ((uint16_t)round_led[round_mux_idx] << 8);
+    // 2. Drive PB8..PB11 column sinks for the next row (without touching PB0..PB7/PB12..PB15)
+    nib = (uint32_t)(round_led[round_mux_idx] & 0x0FU);
+    GPIO_BSRR(GPIOB) = ((~nib & 0x0FUL) << 24) | (nib << 8);
+
+    // 3. Assert active PC0..PC3 row anode HIGH
+    GPIO_BSRR(GPIOC) = (1UL << round_mux_idx);
 
     for (d = 0; d < 20; d++) {}
 
@@ -130,8 +137,8 @@ void process_led_q(void) {
             uint8_t note = led_q[idx].note;
             uint8_t row = (uint8_t)(7 - (note / 8));
             uint8_t col = (uint8_t)(note % 8);
-            uint8_t grn_idx = kTmGreenRow[row];
-            uint8_t red_idx = kTmRedRow[row];
+            uint8_t grn_idx = k_tm_green_row[row];
+            uint8_t red_idx = k_tm_red_row[row];
             uint32_t color = led_q[idx].color;
             uint8_t mask = (uint8_t)(1U << col);
 
@@ -166,24 +173,25 @@ void process_led_q(void) {
 
     if (dirty != 0) {
         // Command 1: 0x40 (Data setting: write display, auto-increment address)
-        GPIOB->ODR &= ~GPIO_Pin_12;
+        gpio_clear(GPIOB, GPIO12);
         tm_send_byte(0x40);
-        GPIOB->ODR |= GPIO_Pin_12;
+        gpio_set(GPIOB, GPIO12);
         for (i = 0; i < 16; i++) {}
 
         // Command 2: 0xC0 (Address 0x00) + 16 display bytes
-        GPIOB->ODR &= ~GPIO_Pin_12;
+        gpio_clear(GPIOB, GPIO12);
         tm_send_byte(0xC0);
         for (i = 0; i < 16; i++) {}
         for (i = 0; i < 16; i++) {
             tm_send_byte(tm_live[i]);
         }
-        GPIOB->ODR |= GPIO_Pin_12;
+        gpio_set(GPIOB, GPIO12);
         for (i = 0; i < 16; i++) {}
 
         // Command 3: 0x8F (Display ON, max pulse width 14/16)
-        GPIOB->ODR &= ~GPIO_Pin_12;
+        gpio_clear(GPIOB, GPIO12);
         tm_send_byte(0x8F);
+        gpio_set(GPIOB, GPIO12);
     }
 }
 

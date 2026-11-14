@@ -1,17 +1,18 @@
 #pragma once
 
-#include "stm32f10x.h"
+#include <stdbool.h>
+#include <stdint.h>
 #include "buttons_faders.h"
 #include "leds_tm1629.h"
 #include "usb_midi_io.h"
 
 /*---------------------------------------------------------------------------
- * Global Timing Gates & Flags (updated in SysTick_Handler / USB IRQs)
+ * Global Timing Gates & Flags (updated in sys_tick_handler / USB IRQs)
  *---------------------------------------------------------------------------*/
 extern volatile uint8_t usb_tx_busy;
 extern volatile uint8_t adc_tick_div10;
 extern volatile uint8_t sys_tick_div2;
-extern volatile uint8_t sysex_Msg_id;
+extern volatile uint8_t sysex_msg_id;
 extern volatile uint8_t scan_gate;
 extern volatile uint8_t round_mux_idx;
 extern volatile uint8_t round_gate;
@@ -39,10 +40,10 @@ extern uint8_t tm_shadow[16];
 /*---------------------------------------------------------------------------
  * Constant Tables
  *---------------------------------------------------------------------------*/
-extern const uint8_t kUpdaterUnlockReq[12];
-extern const uint8_t kBootloaderMagic[8];
-extern const uint8_t kTmRedRow[8];
-extern const uint8_t kTmGreenRow[8];
+extern const uint8_t k_updater_unlock_req[12];
+extern const uint8_t k_bootloader_magic[8];
+extern const uint8_t k_tm_red_row[8];
+extern const uint8_t k_tm_green_row[8];
 
 extern uint8_t usb_ep1_rx_buf[64];
 extern uint8_t flash_page_buf[256];

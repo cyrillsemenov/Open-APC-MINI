@@ -1,16 +1,18 @@
-#include "usb_lib.h"
-#include "usb_pwr.h"
+#include <libopencm3/cm3/scb.h>
+#include <libopencm3/stm32/flash.h>
+#include <libopencm3/stm32/st_usbfs.h>
+#include "hw_config.h"
 #include "apc_mini.h"
 
-const uint8_t kUpdaterUnlockReq[12] = {0x04, 0xF0, 0x5A, 0x57, 0x04, 0x6E,
-                                       0x28, 0x3C, 0x07, 0x4E, 0x3E, 0xF7};
+const uint8_t k_updater_unlock_req[12] = {0x04, 0xF0, 0x5A, 0x57, 0x04, 0x6E,
+                                          0x28, 0x3C, 0x07, 0x4E, 0x3E, 0xF7};
 
-const uint8_t kBootloaderMagic[8] = {0x55, 0x5A, 0xA5, 0xAA, 0x59, 0x95, 0x3A, 0xA3};
+const uint8_t k_bootloader_magic[8] = {0x55, 0x5A, 0xA5, 0xAA, 0x59, 0x95, 0x3A, 0xA3};
 
 // Global USB-MIDI TX/RX Buffers & State
 volatile uint8_t usb_tx_busy = 0;
 static uint8_t rx_sysex_state = 0;
-volatile uint8_t sysex_Msg_id = 0;
+volatile uint8_t sysex_msg_id = 0;
 static uint16_t midi_msg_len = 0;
 static uint8_t midi_msg_ready = 0;
 volatile uint8_t sof_flag = 0;
@@ -44,6 +46,7 @@ void usb_tx_q_init(void) {
     tx_q1_write_ptr = tx_q1_buf;
     tx_q1_read_ptr = tx_q1_buf;
     tx_q1_count = 0;
+    (void)tx_q1_write_ptr;
 }
 
 void usb_tx_q0_write(const uint8_t *src, uint8_t len) {
@@ -98,17 +101,10 @@ uint8_t usb_tx_q1_read(uint8_t *dst, uint8_t len) {
     return i;
 }
 
-uint32_t USB_SIL_Write_EP1(uint8_t *pBufferPointer, uint32_t wBufferSize) {
-    UserToPMABufferCopy(pBufferPointer, GetEPTxAddr(ENDP1), (uint16_t)wBufferSize);
-    SetEPTxCount(ENDP1, (uint16_t)wBufferSize);
-    SetEPTxValid(ENDP1);
-    return 0;
-}
-
 void usb_midi_flush_tx(void) {
     uint8_t n;
 
-    if (Device_Info.Current_Configuration == 0) {
+    if (!usb_midi_is_configured()) {
         return;
     }
     if (usb_tx_busy != 0) {
@@ -116,20 +112,20 @@ void usb_midi_flush_tx(void) {
     }
 
     // Check EP1 STAT_TX == NAK before transmitting
-    if ((_GetENDPOINT(ENDP1) & EPTX_STAT) == EP_TX_VALID) {
+    if ((*USB_EP_REG(USB_EP1) & USB_EP_TX_STAT) == USB_EP_TX_STAT_VALID) {
         return;
     }
 
     if (tx_q1_count >= 64) {
         n = usb_tx_q1_read(tx_ep1_pkt, 64);
         (void)n;
-        USB_SIL_Write_EP1(tx_ep1_pkt, 64);
+        usb_ep1_write(tx_ep1_pkt, 64);
     } else if (tx_q0_count >= 3) {
         n = usb_tx_q0_read(tx_ep1_pkt, 64);
         while (n < 64) {
             tx_ep1_pkt[n++] = 0x00;
         }
-        USB_SIL_Write_EP1(tx_ep1_pkt, 64);
+        usb_ep1_write(tx_ep1_pkt, 64);
     }
 }
 
@@ -240,6 +236,7 @@ void usb_rx_parse_packet(void) {
     } else if (rx_sysex_state == 1) {
         midi_msg_ready = 1;
     }
+    (void)midi_msg_ready;
 }
 
 void send_identity_reply(void) {
@@ -264,7 +261,7 @@ void send_identity_reply(void) {
     *p++ = 0x00;
     *p++ = 0x04;
     *p++ = 0x00;
-    *p++ = sysex_Msg_id;
+    *p++ = sysex_msg_id;
     *p++ = 0x00;
     *p++ = 0x04;
     *p++ = 0x00;
@@ -305,7 +302,7 @@ void send_ableton_fader_dump(void) {
     *p++ = 0x04;
     *p++ = 0xF0;
     *p++ = 0x47;
-    *p++ = sysex_Msg_id;
+    *p++ = sysex_msg_id;
     *p++ = 0x04;
     *p++ = 0x28;
     *p++ = 0x61;
@@ -353,48 +350,49 @@ uint8_t flash_write_page_256(uint32_t page_addr) {
         return 1;
     }
 
-    FLASH_Unlock();
-    FLASH_ClearFlag(FLASH_FLAG_BSY | FLASH_FLAG_EOP | FLASH_FLAG_PGERR | FLASH_FLAG_WRPRTERR);
+    flash_unlock();
+    flash_clear_status_flags();
+    flash_erase_page(page_addr);
 
-    if (FLASH_ErasePage(page_addr) != FLASH_COMPLETE) {
-        FLASH_Lock();
+    if ((FLASH_SR & (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) != 0) {
+        flash_lock();
         return 0;
     }
 
     for (offset = 0; offset < 256; offset += 4) {
         uint32_t ram_w = *(uint32_t *)(flash_page_buf + offset);
-        FLASH_ProgramWord(page_addr + offset, ram_w);
+        flash_program_word(page_addr + offset, ram_w);
         for (d = 0; d < 20; d++) {}
         if (*(volatile uint32_t *)(page_addr + offset) != ram_w) {
-            FLASH_Lock();
+            flash_lock();
             return 0;
         }
     }
 
-    FLASH_Lock();
+    flash_lock();
     return 1;
 }
 
 void handle_updater_unlock_and_reset(void) {
     uint8_t i;
     uint8_t ack[64];
-    volatile uint32_t d; // !
+    volatile uint32_t d;
 
     if (usb_ep1_rx_buf[1] != 0xF0) {
         return;
     }
 
     for (i = 0; i < 12; i++) {
-        if (usb_ep1_rx_buf[i] != kUpdaterUnlockReq[i]) {
+        if (usb_ep1_rx_buf[i] != k_updater_unlock_req[i]) {
             return;
         }
     }
 
     // Copy 8-byte bootloader magic into flash_page_buf and program
     for (i = 0; i < 8; i++) {
-        flash_page_buf[i] = kBootloaderMagic[i];
+        flash_page_buf[i] = k_bootloader_magic[i];
     }
-    flash_write_page_256((uint32_t)_boot_magic_page);
+    flash_write_page_256((uint32_t)(uintptr_t)_boot_magic_page);
 
     for (i = 0; i < 64; i++) {
         ack[i] = 0x00;
@@ -403,11 +401,11 @@ void handle_updater_unlock_and_reset(void) {
     ack[1] = 0xF0;
     ack[2] = 0x15;
     ack[3] = 0xF7;
-    USB_SIL_Write_EP1(ack, 64);
+    usb_ep1_write(ack, 64);
 
-    // Wait for the USB host to read the EP1 IN packet (STAT_TX leaves EP_TX_VALID)
+    // Wait for the USB host to read the EP1 IN packet (STAT_TX leaves USB_EP_TX_STAT_VALID)
     for (d = 0; d < 400000; d++) {
-        if ((_GetENDPOINT(ENDP1) & EPTX_STAT) != EP_TX_VALID) {
+        if ((*USB_EP_REG(USB_EP1) & USB_EP_TX_STAT) != USB_EP_TX_STAT_VALID) {
             break;
         }
     }
@@ -416,13 +414,12 @@ void handle_updater_unlock_and_reset(void) {
     for (d = 0; d < 20000; d++) {}
 
     // Pull PA8 (USB D+ pull-up) LOW so the host OS registers a physical USB disconnect
-    USB_Cable_Config(DISABLE);
+    usb_dp_pullup(false);
     for (d = 0; d < 400000; d++) {}
 
-    // Trigger ARM Cortex-M3 System Reset (SCB->AIRCR = VECTKEY (0x05FA) | SYSRESETREQ (bit 2))
-    __DSB();
-    SCB->AIRCR = (0x5FAUL << 16) | (SCB->AIRCR & 0x700UL) | (1UL << 2);
-    __DSB();
+    // Trigger ARM Cortex-M3 System Reset (SCB_AIRCR = VECTKEY | SYSRESETREQ)
+    __asm__ volatile("dsb 0xF" ::: "memory");
+    scb_reset_system();
     while (1) {}
 }
 
@@ -455,7 +452,7 @@ void usb_midi_poll_rx(void) {
                      midi_msg_buf[23] == 0xF7) {
                 uint8_t k;
                 consumed = 24;
-                sysex_Msg_id = midi_msg_buf[2];
+                sysex_msg_id = midi_msg_buf[2];
                 for (k = 7; k < 23; k++) {
                     serial_buf[k - 7] = midi_msg_buf[k];
                 }
@@ -466,7 +463,7 @@ void usb_midi_poll_rx(void) {
                      midi_msg_buf[5] == 0x00 && midi_msg_buf[6] == 0x04 &&
                      midi_msg_buf[7] == 0x00 && midi_msg_buf[11] == 0xF7) {
                 consumed = 12;
-                sysex_Msg_id = midi_msg_buf[2];
+                sysex_msg_id = midi_msg_buf[2];
                 send_ableton_fader_dump();
             } else {
                 goto reset_msg_buf;
