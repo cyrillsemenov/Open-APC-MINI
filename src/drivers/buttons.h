@@ -15,3 +15,4 @@ typedef void (*buttons_event_fn)(apc_btn_group_t group, uint8_t index, bool pres
 void buttons_init(void);
 void buttons_task(uint32_t now_ticks, buttons_event_fn on_event);
 bool buttons_shift_pressed(void);
+void buttons_scan_boot_chord(bool *out_monome_mode, bool *out_dfu_mode);

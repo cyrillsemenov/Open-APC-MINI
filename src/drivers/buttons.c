@@ -45,6 +45,7 @@ static void dispatch_button_changes(buttons_event_fn on_event) {
 
     uint16_t mask = s_dirty_mask;
     s_dirty_mask = 0;
+    s_shift_pressed = (s_stable[10] & 0x01U) != 0;
 
     for (uint8_t col = 0; col < APC_BTN_NUM_COLS; col++) {
         if ((mask & (1U << col)) == 0) {
@@ -117,4 +118,28 @@ void buttons_task(uint32_t now_ticks, buttons_event_fn on_event) {
 
 bool buttons_shift_pressed(void) {
     return s_shift_pressed;
+}
+
+void buttons_scan_boot_chord(bool *out_monome_mode, bool *out_dfu_mode) {
+    // Scan Column 9 (Scene 1..8)
+    uint32_t col9_bit = (uint32_t)(APC_BTN_COL0_PIN << 9U);
+    GPIO_BSRR(APC_BTN_COL_PORT) = (col9_bit << 16) | ((uint32_t)APC_BTN_COL_MASK & ~col9_bit);
+    for (volatile uint8_t d = 0; d < 30; d++) {}
+    uint8_t scene_pressed = (uint8_t)(~GPIO_IDR(APC_BTN_ROW_PORT) & APC_BTN_ROW_MASK);
+
+    // Scan Column 10 (Shift)
+    uint32_t col10_bit = (uint32_t)(APC_BTN_COL0_PIN << 10U);
+    GPIO_BSRR(APC_BTN_COL_PORT) = (col10_bit << 16) | ((uint32_t)APC_BTN_COL_MASK & ~col10_bit);
+    for (volatile uint8_t d = 0; d < 30; d++) {}
+    uint8_t shift_pressed = (uint8_t)(~GPIO_IDR(APC_BTN_ROW_PORT) & 0x01U);
+
+    // Release all button strobes HIGH
+    GPIO_BSRR(APC_BTN_COL_PORT) = APC_BTN_COL_MASK;
+
+    if (out_dfu_mode != 0) {
+        *out_dfu_mode = (scene_pressed & (1U << 7U)) != 0;
+    }
+    if (out_monome_mode != 0) {
+        *out_monome_mode = (shift_pressed != 0) || ((scene_pressed & (1U << 1U)) != 0);
+    }
 }

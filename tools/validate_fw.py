@@ -77,6 +77,7 @@ class STM32F102Harness:
         self.usb_istr = 0
         self.ep1_tx_polls = 0
         self.ep1_in_packets: list[bytes] = []
+        self.pa8_falls = 0
 
         # Watchdog, Flash, Reset & LED tracking
         self.iwdg_unlocked = False
@@ -352,6 +353,9 @@ class STM32F102Harness:
         old_odr = self.gpio_odr[port]
         self.gpio_odr[port] = new_odr
 
+        if port == 0 and ((old_odr >> 8) & 1) == 1 and ((new_odr >> 8) & 1) == 0:
+            self.pa8_falls += 1
+
         # Decode TM1629 on GPIOB (PB12=STB, PB13=CLK, PB14=DIO)
         if port == 1:
             old_stb = (old_odr >> 12) & 1
@@ -542,19 +546,24 @@ class STM32F102Harness:
             self.call_isr(VEC_USB_LP_IRQ)
         return data
 
-    def usb_ep1_out(self, payload: bytes) -> None:
-        if (self.usb_epr[1] & 0x3000) != 0x3000:
-            raise ValidationError(f"EP1 RX is not VALID (EP1R=0x{self.usb_epr[1]:04X})")
-        ent = self._btable_entry_cpu_addr(1)
+    def usb_ep_out(self, ep: int, payload: bytes) -> None:
+        if (self.usb_epr[ep] & 0x3000) != 0x3000:
+            raise ValidationError(
+                f"EP{ep} RX is not VALID (EP{ep}R=0x{self.usb_epr[ep]:04X})"
+            )
+        ent = self._btable_entry_cpu_addr(ep)
         rx_addr = struct.unpack("<H", self.uc.mem_read(ent + 8, 2))[0]
         rx_cnt_hi = struct.unpack("<H", self.uc.mem_read(ent + 12, 2))[0] & 0xFC00
         self._pma_write(rx_addr, payload)
         self.uc.mem_write(ent + 12, struct.pack("<H", rx_cnt_hi | len(payload)))
 
-        self.usb_epr[1] = (
-            (self.usb_epr[1] & ~0x3800) | 0x2000
-        ) | 0x8000  # RX_NAK | CTR_RX
+        self.usb_epr[ep] = (
+            (self.usb_epr[ep] & ~0x3800) | 0x2000
+        ) | (0x8000 | ep)  # RX_NAK | CTR_RX
         self.call_isr(VEC_USB_LP_IRQ)
+
+    def usb_ep1_out(self, payload: bytes) -> None:
+        self.usb_ep_out(1, payload)
 
     def usb_poll_ep1_in(self) -> list[bytes]:
         out = list(self.ep1_in_packets)
@@ -907,6 +916,130 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
     check(
         flash_kb == 128 and idcode == 0x10016410 and loop_cnt > 0,
         f"Unexpected telemetry values: flash_kb={flash_kb}, idcode=0x{idcode:08X}, loops={loop_cnt}",
+    )
+
+    # 10. Runtime Switch to Monome serialosc (FTDI 0403:6001) & mext Protocol
+    falls_before = mcu.pa8_falls
+    # Hold Shift (col=10, row=0) + Scene 2 (col=9, row=1) across debounce scans
+    mcu.pressed_buttons = {(10, 0), (9, 1)}
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(150_000)
+    mcu.pressed_buttons.clear()
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(20_000)
+
+    check(
+        mcu.pa8_falls > falls_before and (mcu.gpio_odr[0] & (1 << 8)) != 0,
+        "Runtime profile switch did not pulse PA8 LOW -> HIGH for USB re-enumeration",
+    )
+
+    mcu.usb_reset()
+    ftdi_desc = mcu.usb_ep0_setup(
+        bytes([0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x12, 0x00]), expect_in=True
+    )
+    f_vid, f_pid = struct.unpack_from("<HH", ftdi_desc, 8)
+    check(
+        (f_vid, f_pid) == (0x0403, 0x6001),
+        f"Expected FTDI VID:PID 0403:6001 in Monome mode, got {f_vid:04X}:{f_pid:04X}",
+    )
+
+    # Set configuration 1 & verify FTDI vendor control requests (SIO_GET_MODEM_STATUS = 0x05)
+    mcu.usb_ep0_setup(
+        bytes([0x00, 0x09, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]), expect_in=False
+    )
+    modem_stat = mcu.usb_ep0_setup(
+        bytes([0xC0, 0x05, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00]), expect_in=True
+    )
+    check(
+        modem_stat == b"\x01\x60",
+        f"FTDI SIO_GET_MODEM_STATUS expected 01 60, got {modem_stat.hex()}",
+    )
+    check(
+        (mcu.usb_epr[2] & 0x3000) == 0x3000,
+        "FTDI EP2 Bulk OUT not armed after SET_CONFIGURATION",
+    )
+
+    # Send mext /sys/id (0x01) and /sys/size (0x03) on EP2 OUT
+    mcu.usb_poll_ep1_in()
+    mcu.usb_ep_out(2, bytes([0x01, 0x03]))
+    mcu.run_steps(30_000)
+    ftdi_in = mcu.usb_poll_ep1_in()
+    check(
+        len(ftdi_in) >= 1 and ftdi_in[0][:2] == b"\x01\x60",
+        f"Missing 2-byte FTDI status header (01 60) on Bulk IN: {ftdi_in}",
+    )
+    mext_stream = b"".join(p[2:] for p in ftdi_in if len(p) > 2)
+    check(
+        len(mext_stream) == 36
+        and mext_stream[0] == 0x01
+        and mext_stream[1:9] == b"m1000001"
+        and mext_stream[33:36] == b"\x02\x08\x08",
+        f"Bad mext /sys/id + /sys/size reply ({len(mext_stream)} B): {mext_stream.hex(' ')}",
+    )
+
+    # Press top-left Grid Pad (col=0, row=0 -> Monome x=0, y=0) -> expect 0x21 0x00 0x00
+    mcu.pressed_buttons = {(0, 0)}
+    key_pkts: list[bytes] = []
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(15_000)
+        key_pkts.extend(mcu.usb_poll_ep1_in())
+    key_bytes = b"".join(p[2:] for p in key_pkts if len(p) > 2)
+    check(
+        key_bytes == b"\x21\x00\x00",
+        f"Expected Monome top-left key-down (21 00 00), got {key_bytes.hex(' ')}",
+    )
+
+    mcu.pressed_buttons.clear()
+    key_pkts.clear()
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(15_000)
+        key_pkts.extend(mcu.usb_poll_ep1_in())
+    key_bytes = b"".join(p[2:] for p in key_pkts if len(p) > 2)
+    check(
+        key_bytes == b"\x20\x00\x00",
+        f"Expected Monome top-left key-up (20 00 00), got {key_bytes.hex(' ')}",
+    )
+
+    # Test mext varibright LED command (0x18 x=0 y=0 level=15 -> Red on row=0, col=0)
+    # and mext LED intensity (0x17 0x0A -> TM1629 brightness 3 -> 0x8B)
+    mcu.tm_frames.clear()
+    mcu.tm_display = None
+    mcu.usb_ep_out(2, bytes([0x18, 0x00, 0x00, 0x0F, 0x17, 0x0A]))
+    mcu.run_steps(25_000)
+    for _ in range(60):
+        mcu.call_isr(VEC_SYSTICK)
+    mcu.run_steps(80_000)
+    check(
+        mcu.tm_display is not None and (mcu.tm_display[0x00] & 0x01) == 0x01,
+        f"Monome varibright level 15 did not light top-left pad Red: {mcu.tm_display}",
+    )
+    check(
+        bytes(mcu._tm_cur) == b"\x8b" or b"\x8b" in mcu.tm_frames,
+        f"Monome 0x17 intensity did not update TM1629 brightness to 0x8B: {mcu.tm_frames}",
+    )
+
+    # Test Fader 1 -> mext Tilt Sensor 0 (0x81 0x00 ...)
+    for _ in range(6):
+        mcu.fader_adc[0] = 2048
+        mcu._run_adc1_dma()
+        mcu.run_steps(10_000)
+    tilt_pkts = mcu.usb_poll_ep1_in()
+    tilt_bytes = b"".join(p[2:] for p in tilt_pkts if len(p) > 2)
+    check(
+        len(tilt_bytes) >= 8 and tilt_bytes[0] == 0x81 and tilt_bytes[1] == 0x00,
+        f"Expected mext tilt packet (81 00 ...), got {tilt_bytes.hex(' ')}",
+    )
+    ok(
+        "Monome serialosc (0403:6001)",
+        "FTDI vendor reqs, mext /sys, top-left (0,0) keys, varibright+intensity, fader tilt",
     )
 
     # 10. Bootloader DFU Unlock & Reset

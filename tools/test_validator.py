@@ -109,6 +109,12 @@ BROKEN_CASES: list[BrokenCase] = [
         c_stub="void __wrap_bootloader_fault_dfu(unsigned int msp, unsigned int ipsr) { (void)msp; (void)ipsr; }",
         expected_err="Black-box crash log at 0x08007800 did not capture exception frame",
     ),
+    BrokenCase(
+        name="broken_monome_mext",
+        wrap_symbol="monome_mode_poll_rx",
+        c_stub="void __wrap_monome_mode_poll_rx(unsigned int t) { (void)t; }",
+        expected_err="Missing 2-byte FTDI status header",
+    ),
 ]
 
 

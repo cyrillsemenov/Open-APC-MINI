@@ -24,6 +24,11 @@ static const uint8_t k_updater_unlock_req[12] = {
     MIDI_STATUS_SYSEX_END,
 };
 
+// Raw 9-byte DFU unlock sequence (used over serial/FTDI): F0 5A 57 6E 28 3C 4E 3E F7
+static const uint8_t k_raw_unlock_req[9] = {
+    MIDI_STATUS_SYSEX_START, 0x5AU, 0x57U, 0x6EU, 0x28U, 0x3CU, 0x4EU, 0x3EU, MIDI_STATUS_SYSEX_END,
+};
+
 // 8-byte bootloader flag expected at 0x08007C00: 55 5A A5 AA 59 95 3A A3 (little-endian words)
 #define BOOT_MAGIC_WORD0 0xAAA55A55UL
 #define BOOT_MAGIC_WORD1 0xA33A9559UL
@@ -151,14 +156,24 @@ void bootloader_fault_dfu(uint32_t fault_msp, uint32_t ipsr) {
 }
 
 void bootloader_check_unlock_packet(const uint8_t pkt[64]) {
-    if (pkt[1] != MIDI_STATUS_SYSEX_START) {
-        return;
-    }
-
+    bool is_midi_unlock = true;
     for (uint8_t i = 0; i < sizeof(k_updater_unlock_req); i++) {
         if (pkt[i] != k_updater_unlock_req[i]) {
-            return;
+            is_midi_unlock = false;
+            break;
         }
+    }
+
+    bool is_raw_unlock = true;
+    for (uint8_t i = 0; i < sizeof(k_raw_unlock_req); i++) {
+        if (pkt[i] != k_raw_unlock_req[i]) {
+            is_raw_unlock = false;
+            break;
+        }
+    }
+
+    if (!is_midi_unlock && !is_raw_unlock) {
+        return;
     }
 
     write_bootloader_magic_page((uint32_t)(uintptr_t)_boot_magic_page);

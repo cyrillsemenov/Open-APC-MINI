@@ -184,6 +184,13 @@ void sysex_handle_msg(const uint8_t *msg, uint16_t len) {
         return;
     }
 
+    // Bootloader DFU entry SysEx: F0 75 7F 75 54 00 00 F7
+    if (len == 8U && msg[1] == 0x75U && msg[2] == 0x7FU && msg[3] == 0x75U && msg[4] == 0x54U &&
+        msg[5] == 0x00U && msg[6] == 0x00U) {
+        bootloader_enter_dfu();
+        return;
+    }
+
     // Akai APC Mini vendor messages: F0 47 <dev> 28 <cmd> ...
     if (len >= 8U && msg[1] == AKAI_MANUFACTURER_ID && msg[2] <= 0x7FU &&
         msg[3] == AKAI_APC_MINI_MODEL_ID) {

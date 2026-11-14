@@ -146,6 +146,11 @@ void leds_set_pad(uint8_t row, uint8_t col, apc_pad_led_mode_t mode, uint32_t no
     }
 }
 
+void leds_set_brightness(uint8_t level, uint32_t now_ticks) {
+    tm1629_set_brightness(level);
+    tm1629_schedule_flush(now_ticks, false);
+}
+
 void leds_set_round(apc_round_led_group_t group, uint8_t index, apc_round_led_mode_t mode) {
     if (index >= 8 || group > APC_ROUND_GROUP_SCENE) {
         return;

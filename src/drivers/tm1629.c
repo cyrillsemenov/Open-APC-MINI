@@ -4,6 +4,7 @@
 
 #define TM1629_CMD_DATA_WRITE_AUTO 0x40U
 #define TM1629_CMD_ADDR_BASE       0xC0U
+#define TM1629_CMD_DISPLAY_ON_BASE 0x88U
 #define TM1629_CMD_DISPLAY_ON_MAX  0x8FU
 
 static const uint8_t k_tm_red_row[8] = {0x00, 0x01, 0x04, 0x05, 0x08, 0x09, 0x0C, 0x0D};
@@ -11,6 +12,8 @@ static const uint8_t k_tm_green_row[8] = {0x02, 0x03, 0x06, 0x07, 0x0A, 0x0B, 0x
 
 static uint8_t s_shadow[16];
 static uint8_t s_live[16];
+static uint8_t s_display_cmd = TM1629_CMD_DISPLAY_ON_MAX;
+static bool s_brightness_dirty = false;
 static bool s_pending = false;
 static bool s_cooldown_active = false;
 static uint32_t s_cooldown_start = 0;
@@ -50,9 +53,9 @@ static void tm1629_flush_hw(void) {
     gpio_set(APC_TM1629_PORT, APC_TM1629_STB_PIN);
     for (volatile uint8_t d = 0; d < 16; d++) {}
 
-    // Command 3: 0x8F (Display ON, max pulse width 14/16)
+    // Command 3: 0x88..0x8F (Display ON + 3-bit pulse width)
     gpio_clear(APC_TM1629_PORT, APC_TM1629_STB_PIN);
-    tm1629_send_byte(TM1629_CMD_DISPLAY_ON_MAX);
+    tm1629_send_byte(s_display_cmd);
     gpio_set(APC_TM1629_PORT, APC_TM1629_STB_PIN);
 }
 
@@ -61,6 +64,8 @@ void tm1629_init(void) {
         s_shadow[i] = 0;
         s_live[i] = 0;
     }
+    s_display_cmd = TM1629_CMD_DISPLAY_ON_MAX;
+    s_brightness_dirty = false;
     s_pending = false;
     s_cooldown_active = false;
     s_cooldown_start = 0;
@@ -68,6 +73,15 @@ void tm1629_init(void) {
 
     // Actively clear the TM1629's internal 16-byte display RAM across soft reboots
     tm1629_flush_hw();
+}
+
+void tm1629_set_brightness(uint8_t level) {
+    uint8_t cmd = (uint8_t)(TM1629_CMD_DISPLAY_ON_BASE | (level & 0x07U));
+    if (cmd != s_display_cmd) {
+        s_display_cmd = cmd;
+        s_brightness_dirty = true;
+        s_pending = true;
+    }
 }
 
 void tm1629_set_pad_rgb(uint8_t row, uint8_t col, bool green, bool red) {
@@ -123,7 +137,8 @@ void tm1629_task(uint32_t now_ticks) {
     }
     s_pending = false;
 
-    bool dirty = false;
+    bool dirty = s_brightness_dirty;
+    s_brightness_dirty = false;
     for (uint8_t i = 0; i < 16; i++) {
         if (s_shadow[i] != s_live[i]) {
             dirty = true;
