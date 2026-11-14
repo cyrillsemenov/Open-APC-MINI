@@ -173,7 +173,7 @@ test-validator: $(APP_BIN) $(APP_SYX)
 flash: $(APP_SYX)
 	$(UV) run fw_updater $(APP_SYX)
 
-web-dist: $(APP_BIN) $(APP_SYX) web/index.html tools/build_web_manifest.py
+web-dist: $(APP_BIN) $(APP_SYX) $(wildcard web/*) tools/build_web_manifest.py
 	$(UV) run build_web_manifest --web-src web --out-dir $(WEB_DIST_DIR) --bin $(APP_BIN) --syx $(APP_SYX)
 
 serve-web: web-dist

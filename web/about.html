@@ -3,8 +3,152 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>APC Mini — WebMIDI Firmware Updater</title>
+        <title>About — Open APC Mini Firmware</title>
         <link href="style.css" rel="stylesheet" />
     </head>
-    <body></body>
+    <body>
+        <div class="container">
+            <header>
+                <div class="brand">
+                    <div class="pad-grid-icon" aria-hidden="true">
+                        <span></span><span></span><span></span> <span></span
+                        ><span></span><span></span> <span></span><span></span
+                        ><span></span>
+                    </div>
+                    <div>
+                        <h1>Open APC Mini Firmware</h1>
+                        <p class="subtitle">
+                            Background, Hardware &amp; Roadmap
+                        </p>
+                    </div>
+                </div>
+                <div class="header-right">
+                    <a class="nav-link" href="index.html"
+                        >&larr; Back to Updater</a
+                    >
+                </div>
+            </header>
+
+            <section class="card prose">
+                <div class="card-title">
+                    <span>The Story</span>
+                </div>
+                <p>
+                    I have my APC Mini lying around which I've been using on and
+                    off for years. It's a nice control panel: it has 9 faders,
+                    sometimes I used it as a MIDI keyboard with a ridiculously
+                    wide range, and I've connected it to Pure Data (PD) — though
+                    I barely use it with Ableton. During all this time I wanted
+                    to get inside its brains and find out what it is capable of.
+                </p>
+                <p>
+                    One project inspired me:
+                    <a
+                        href="https://github.com/craigsblackie/MPK-Mini-open"
+                        target="_blank"
+                        rel="noopener"
+                        >craigsblackie/MPK-Mini-open</a
+                    >. The MPK uses almost the same MCU as the APC
+                    (<code>STM32F102RBT6</code>), so it was almost definitely
+                    vulnerable to power-glitch readout via
+                    <a
+                        href="https://github.com/CTXz/stm32f1-picopwner"
+                        target="_blank"
+                        rel="noopener"
+                        >CTXz/stm32f1-picopwner</a
+                    >. I connected all needed wires to an RPi Pico and dumped
+                    the firmware.
+                </p>
+                <p>
+                    Why do we need a dump? First of all, it is a save point;
+                    second, we might find something interesting in there. And
+                    boy there was — a hidden USB-MIDI bootloader mode, activated
+                    only by a special SysEx command! Even more counterintuitive
+                    is that on factory firmware, after sending this command, you
+                    have to physically power-cycle the APC to enter Updater mode
+                    before you can flash your own firmware onto it.
+                </p>
+                <p>
+                    The circuit of the APC Mini is remarkably simple: just an
+                    <code>STM32F102RBT6</code> MCU and a <code>TM1629</code> LED
+                    driver. So my first goal was to recreate the stock firmware
+                    using the ST Standard Peripheral and USB-FS Device libraries
+                    and apply a couple of key fixes.
+                </p>
+            </section>
+
+            <section class="card prose">
+                <div class="card-title">
+                    <span>What's Fixed &amp; Improved</span>
+                </div>
+                <ul>
+                    <li>
+                        <strong>Soft Reboot on Updater Handshake:</strong> No
+                        physical USB power-cycle is needed when updating from
+                        this firmware — the MCU pulls the USB D+ pull-up
+                        (<code>PA8</code>) low, forces USB re-enumeration, and
+                        resets directly into the bootloader.
+                        <em
+                            >(Note: if you are updating from the original
+                            factory firmware for the very first time, you will
+                            need to unplug and replug the USB cable once when
+                            prompted.)</em
+                        >
+                    </li>
+                    <li>
+                        <strong>Smooth Slider / Fader Filtering:</strong> On
+                        stock firmware, the faders jump multiple values and make
+                        it hard to dial in an exact MIDI CC value even within
+                        the 0–127 range. The ADC filter and hysteresis have been
+                        fixed for smooth, predictable single-step tracking.
+                    </li>
+                </ul>
+            </section>
+
+            <section class="card prose">
+                <div class="card-title">
+                    <span>Roadmap &amp; Future Plans</span>
+                </div>
+                <ul>
+                    <li>Implement Mackie Control Universal (MCU) protocol</li>
+                    <li>
+                        <a
+                            href="https://github.com/monome/serialosc"
+                            target="_blank"
+                            rel="noopener"
+                            >monome/serialosc</a
+                        >
+                        compatibility
+                    </li>
+                    <li>
+                        Poor man's monome grid (run Lua scripts directly inside
+                        your APC)
+                    </li>
+                    <li>
+                        Improved visual feedback on the 8&times;8 grid and round
+                        LEDs
+                    </li>
+                </ul>
+                <p>Everyone is welcome to contribute!</p>
+            </section>
+
+            <section class="card prose">
+                <div class="card-title">
+                    <span>Important Notice for Custom Hardware</span>
+                </div>
+                <p>
+                    The default USB
+                    <code>VID:PID</code> (<code>0x09E8:0x0028</code>) and vendor
+                    strings are configured strictly for interoperability on
+                    genuine retail Akai APC Mini hardware. If you build or adapt
+                    this firmware for any non-Akai or custom hardware target,
+                    please override <code>USB_VID</code>, <code>USB_PID</code>,
+                    and <code>USB_STRING_VENDOR</code> (for example via
+                    <a href="https://pid.codes" target="_blank" rel="noopener"
+                        >pid.codes</a
+                    >).
+                </p>
+            </section>
+        </div>
+    </body>
 </html>
