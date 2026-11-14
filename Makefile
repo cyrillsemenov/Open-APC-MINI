@@ -1,0 +1,177 @@
+PROJECT       := apc_mini
+BUILD_DIR     := build
+STOCK_IMAGE   := reverse_engineering/AkaiAPC_1.bin
+
+CROSS_COMPILE ?= arm-none-eabi-
+CC            := $(CROSS_COMPILE)gcc
+OBJCOPY       := $(CROSS_COMPILE)objcopy
+OBJDUMP       := $(CROSS_COMPILE)objdump
+SIZE          := $(CROSS_COMPILE)size
+HOST_CC       ?= cc
+
+STDPERIPH_DIR := lib/STM32F10x_StdPeriph_Lib/Libraries
+CMSIS_CORE    := $(STDPERIPH_DIR)/CMSIS/CM3/CoreSupport
+CMSIS_DEV     := $(STDPERIPH_DIR)/CMSIS/CM3/DeviceSupport/ST/STM32F10x
+STDPERIPH_INC := $(STDPERIPH_DIR)/STM32F10x_StdPeriph_Driver/inc
+STDPERIPH_SRC := $(STDPERIPH_DIR)/STM32F10x_StdPeriph_Driver/src
+USB_DRV_DIR   := lib/STM32_USB-FS-Device_Driver
+USB_DRV_INC   := $(USB_DRV_DIR)/inc
+USB_DRV_SRC   := $(USB_DRV_DIR)/src
+
+INCLUDES := \
+	-Iinclude \
+	-Iinclude/board \
+	-Iinclude/platform \
+	-Iinclude/usb \
+	-Isrc \
+	-Isrc/board \
+	-Isrc/platform \
+	-Isrc/usb \
+	-I$(CMSIS_CORE) \
+	-I$(CMSIS_DEV) \
+	-I$(STDPERIPH_INC) \
+	-I$(USB_DRV_INC)
+
+# -----------------------------------------------------------------------------
+# USB Identity & Legal Notice:
+# The default USB VID/PID (0x09E8:0x0028) and manufacturer/product strings are
+# configured strictly for hardware interoperability on genuine retail Akai APC
+# Mini controllers.
+#
+# DISCLAIMER: If you build or port this firmware for any custom, clone, or
+# non-Akai hardware target, you MUST NOT use Akai's USB VID/PID (0x09E8:0x0028)
+# or vendor name ("AKAI PROFESSIONAL,LP"). Instead, override these variables
+# using one of the following legitimate options for open-source devices:
+#   1. pid.codes (https://pid.codes): Request a free PID under VID 0x1209.
+#   2. Objective Development shared USB-MIDI ID (VID 0x16C0, PID 0x05E4), with
+#      USB_STRING_VENDOR set to your own domain or e-mail address, e.g.:
+#        make USB_VID=0x16C0 USB_PID=0x05E4 \
+#             USB_STRING_VENDOR="example.org" \
+#             USB_STRING_PRODUCT="Open Grid Controller"
+# -----------------------------------------------------------------------------
+GIT_VERSION        := $(shell git describe --tags --exact-match 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo dev)
+
+USB_VID            ?= 0x09E8
+USB_PID            ?= 0x0028
+USB_STRING_VENDOR  ?= AKAI PROFESSIONAL,LP
+USB_STRING_PRODUCT ?= APC MINI
+USB_STRING_SERIAL  ?= $(GIT_VERSION)
+
+DEFINES := \
+	-DSTM32F10X_MD \
+	-DUSE_STDPERIPH_DRIVER \
+	-DUSB_VID=$(USB_VID) \
+	-DUSB_PID=$(USB_PID) \
+	'-DUSB_STRING_VENDOR="$(USB_STRING_VENDOR)"' \
+	'-DUSB_STRING_PRODUCT="$(USB_STRING_PRODUCT)"' \
+	'-DUSB_STRING_SERIAL="$(USB_STRING_SERIAL)"'
+
+CFLAGS := \
+	-mcpu=cortex-m3 \
+	-mthumb \
+	-Os \
+	-std=c11 \
+	-Wall \
+	-Wextra \
+	-Wno-unused-parameter \
+	-ffunction-sections \
+	-fdata-sections \
+	-fno-common \
+	-MMD -MP \
+	$(DEFINES) \
+	$(INCLUDES)
+
+LDFLAGS := \
+	-mcpu=cortex-m3 \
+	-mthumb \
+	-Tld/stm32f102rb_app.ld \
+	-nostartfiles \
+	-Wl,--gc-sections \
+	-Wl,-Map=$(BUILD_DIR)/$(PROJECT)_app.map \
+	--specs=nano.specs \
+	--specs=nosys.specs
+
+APP_SRCS := \
+	src/main.c \
+	src/platform/startup_stm32f10x_md.c \
+	src/platform/stm32f10x_it.c \
+	src/board/hw_config.c \
+	src/board/leds_tm1629.c \
+	src/board/buttons_faders.c \
+	src/usb/usb_desc.c \
+	src/usb/usb_prop.c \
+	src/usb/usb_pwr.c \
+	src/usb/usb_istr.c \
+	src/usb/usb_endp.c \
+	src/usb/usb_midi_io.c
+
+STDPERIPH_SRCS := \
+	$(STDPERIPH_SRC)/misc.c \
+	$(STDPERIPH_SRC)/stm32f10x_adc.c \
+	$(STDPERIPH_SRC)/stm32f10x_dma.c \
+	$(STDPERIPH_SRC)/stm32f10x_flash.c \
+	$(STDPERIPH_SRC)/stm32f10x_gpio.c \
+	$(STDPERIPH_SRC)/stm32f10x_iwdg.c \
+	$(STDPERIPH_SRC)/stm32f10x_rcc.c
+
+USB_SRCS := \
+	$(USB_DRV_SRC)/usb_core.c \
+	$(USB_DRV_SRC)/usb_init.c \
+	$(USB_DRV_SRC)/usb_int.c \
+	$(USB_DRV_SRC)/usb_mem.c \
+	$(USB_DRV_SRC)/usb_regs.c \
+	$(USB_DRV_SRC)/usb_sil.c
+
+OBJS := \
+	$(patsubst src/%.c,$(BUILD_DIR)/app/%.o,$(APP_SRCS)) \
+	$(patsubst $(STDPERIPH_SRC)/%.c,$(BUILD_DIR)/stdperiph/%.o,$(STDPERIPH_SRCS)) \
+	$(patsubst $(USB_DRV_SRC)/%.c,$(BUILD_DIR)/usb/%.o,$(USB_SRCS))
+
+HOST_TOOL     := $(BUILD_DIR)/firmware_tool
+APP_ELF       := $(BUILD_DIR)/$(PROJECT)_app.elf
+APP_RAW_BIN   := $(BUILD_DIR)/$(PROJECT)_app_raw.bin
+APP_BIN       := $(BUILD_DIR)/$(PROJECT)_app.bin
+FULL_30K_BIN  := $(BUILD_DIR)/$(PROJECT)_full_30k.bin
+FULL_128K_BIN := $(BUILD_DIR)/$(PROJECT)_full.bin
+
+.PHONY: all verify disasm clean
+
+all: $(APP_BIN) $(FULL_30K_BIN) $(FULL_128K_BIN)
+
+$(BUILD_DIR)/app/%.o: src/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/stdperiph/%.o: $(STDPERIPH_SRC)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/usb/%.o: $(USB_DRV_SRC)/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(APP_ELF): $(OBJS) ld/stm32f102rb_app.ld
+	$(CC) $(OBJS) $(LDFLAGS) -o $@
+	$(SIZE) $@
+
+$(APP_RAW_BIN): $(APP_ELF)
+	$(OBJCOPY) -O binary $< $@
+
+$(HOST_TOOL): tools/firmware_tool.c
+	@mkdir -p $(BUILD_DIR)
+	$(HOST_CC) -std=c11 -O2 -Wall -Wextra $< -o $@
+
+$(APP_BIN): $(APP_RAW_BIN) $(HOST_TOOL) $(STOCK_IMAGE)
+	$(HOST_TOOL) stamp $(APP_RAW_BIN) $(APP_BIN) --match-stock-sum $(STOCK_IMAGE)
+
+$(FULL_30K_BIN) $(FULL_128K_BIN): $(APP_BIN) $(HOST_TOOL) $(STOCK_IMAGE)
+	$(HOST_TOOL) combine $(STOCK_IMAGE) $(APP_BIN) $(FULL_30K_BIN) $(FULL_128K_BIN)
+
+verify: all
+	$(HOST_TOOL) verify $(STOCK_IMAGE) $(APP_BIN) $(FULL_30K_BIN) $(FULL_128K_BIN)
+
+disasm: $(APP_ELF)
+	$(OBJDUMP) -d -S $(APP_ELF) > $(BUILD_DIR)/$(PROJECT)_app.lst
+
+clean:
+	rm -rf $(BUILD_DIR)

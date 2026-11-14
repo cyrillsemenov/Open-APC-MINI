@@ -1,0 +1,6 @@
+[submodule "lib/STM32F10x_StdPeriph_Lib"]
+	path = lib/STM32F10x_StdPeriph_Lib
+	url = https://github.com/wajatimur/stm32f10x-stdperiph-lib.git
+[submodule "lib/STM32_USB-FS-Device_Driver"]
+	path = lib/STM32_USB-FS-Device_Driver
+	url = https://github.com/ThePiGrepper/STM32_USB-FS-Device_Driver.git

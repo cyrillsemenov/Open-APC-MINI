@@ -1,0 +1,72 @@
+/* Linker script for Akai APC Mini (STM32F102RBT6: 128 KB Flash, 16 KB SRAM)
+ * Application region: 0x08002000 .. 0x080077FD (22,526 bytes)
+ * Checksum word:      0x080077FE .. 0x080077FF (2 bytes, 16-bit two's complement)
+ */
+
+ENTRY(Reset_Handler)
+
+MEMORY
+{
+    FLASH (rx)       : ORIGIN = 0x08002000, LENGTH = 0x57FE
+    BOOT_MAGIC (rw)  : ORIGIN = 0x08007C00, LENGTH = 1K
+    RAM   (rwx)      : ORIGIN = 0x20000000, LENGTH = 16K
+}
+
+_estack = 0x200019C8;
+
+SECTIONS
+{
+    .isr_vector ORIGIN(FLASH) :
+    {
+        . = ALIGN(4);
+        KEEP(*(.isr_vector))
+        . = ALIGN(4);
+    } > FLASH
+
+    .text :
+    {
+        . = ALIGN(4);
+        *(.text)
+        *(.text*)
+        *(.rodata)
+        *(.rodata*)
+        *(.glue_7)
+        *(.glue_7t)
+        *(.eh_frame)
+        . = ALIGN(4);
+        _etext = .;
+    } > FLASH
+
+    _sidata = LOADADDR(.data);
+
+    .data :
+    {
+        . = ALIGN(4);
+        _sdata = .;
+        *(.data)
+        *(.data*)
+        . = ALIGN(4);
+        _edata = .;
+    } > RAM AT > FLASH
+
+    .boot_magic (NOLOAD) :
+    {
+        . = ALIGN(1024);
+        _boot_magic_page = .;
+    } > BOOT_MAGIC
+
+    .bss :
+    {
+        . = ALIGN(4);
+        _sbss = .;
+        __bss_start__ = _sbss;
+        *(.bss)
+        *(.bss*)
+        *(COMMON)
+        . = ALIGN(4);
+        _ebss = .;
+        __bss_end__ = _ebss;
+    } > RAM
+
+    ASSERT(_ebss + 0x200 <= _estack, "Error: BSS overlaps stack at 0x200019C8")
+}

@@ -1,0 +1,8 @@
+CompileFlags:
+  Add:
+    - --target=arm-none-eabi
+    - -DSTM32F103xB
+    - -include stm32f10x
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None
