@@ -7,6 +7,8 @@
 
 static volatile uint16_t s_adc_dma_buf[APC_FADER_COUNT];
 static uint16_t s_hist[APC_FADER_COUNT][APC_ADC_WINDOW_SAMPLES];
+static int32_t s_ema_q4[APC_FADER_COUNT];
+static uint16_t s_hires_val[APC_FADER_COUNT];
 static uint8_t s_cc_val[APC_FADER_COUNT];
 static uint8_t s_ring_idx = 0;
 static uint8_t s_warm_samples = 0;
@@ -55,6 +57,18 @@ static void adc_dma_hw_init(void) {
 
     dma_clear_interrupt_flags(DMA1, DMA_CHANNEL1, DMA_GIF);
     adc_start_conversion_regular(ADC1);
+}
+
+static uint16_t adc_to_hires_14bit(uint16_t avg) {
+    if (avg <= APC_ADC_ZERO_MAX) {
+        return 0U;
+    }
+    if (avg >= APC_ADC_FULL_MIN) {
+        return APC_FADER_HIRES_MAX;
+    }
+    uint32_t num = ((uint32_t)(avg - APC_ADC_ZERO_MAX) * (uint32_t)APC_FADER_HIRES_MAX) +
+                   ((uint32_t)APC_ADC_SCALE_SPAN / 2UL);
+    return (uint16_t)(num / (uint32_t)APC_ADC_SCALE_SPAN);
 }
 
 static uint8_t adc_to_cc_nearest(uint16_t avg) {
@@ -128,6 +142,8 @@ static bool harvest_dma_transfer(void) {
 void faders_init(void) {
     for (uint8_t i = 0; i < APC_FADER_COUNT; i++) {
         s_adc_dma_buf[i] = 0;
+        s_ema_q4[i] = 0;
+        s_hires_val[i] = 0;
         s_cc_val[i] = 0;
         for (uint8_t s = 0; s < APC_ADC_WINDOW_SAMPLES; s++) {
             s_hist[i][s] = 0;
@@ -172,14 +188,36 @@ void faders_task(faders_change_fn on_change) {
             avg = (d01 > d02) ? (uint16_t)((s0 + s2) / 2U) : (uint16_t)((s0 + s1) / 2U);
         }
 
-        uint8_t new_cc = quantize_cc_hysteresis(avg, s_cc_val[i]);
-        if (new_cc == s_cc_val[i]) {
-            continue;
+        uint16_t cur_hires = s_hires_val[i];
+        uint16_t raw_hires = adc_to_hires_14bit(avg);
+        if (cur_hires == APC_FADER_HIRES_MAX && avg >= APC_ADC_FULL_HOLD_MIN) {
+            raw_hires = APC_FADER_HIRES_MAX;
+        }
+        int32_t target_q4 = (int32_t)raw_hires << 4;
+        if (raw_hires == 0U || raw_hires == APC_FADER_HIRES_MAX) {
+            s_ema_q4[i] = target_q4;
+        } else {
+            s_ema_q4[i] += (target_q4 - s_ema_q4[i]) >> 3;
+        }
+        uint16_t filt_hires = (uint16_t)((s_ema_q4[i] + 8) >> 4);
+        uint16_t diff_hires =
+            (filt_hires >= cur_hires) ? (uint16_t)(filt_hires - cur_hires)
+                                      : (uint16_t)(cur_hires - filt_hires);
+        bool hires_changed = (diff_hires >= APC_ADC_HIRES_HYST) ||
+                             (filt_hires == 0U && cur_hires != 0U) ||
+                             (filt_hires == APC_FADER_HIRES_MAX && cur_hires != APC_FADER_HIRES_MAX);
+        if (hires_changed) {
+            s_hires_val[i] = filt_hires;
         }
 
-        s_cc_val[i] = new_cc;
-        if (on_change != 0) {
-            on_change(i, new_cc);
+        uint8_t new_cc = quantize_cc_hysteresis(avg, s_cc_val[i]);
+        bool cc_changed = (new_cc != s_cc_val[i]);
+        if (cc_changed) {
+            s_cc_val[i] = new_cc;
+        }
+
+        if ((hires_changed || cc_changed) && on_change != 0) {
+            on_change(i, s_cc_val[i], s_hires_val[i], cc_changed);
         }
     }
 }
@@ -188,4 +226,11 @@ void faders_get_values(uint8_t out_values[APC_FADER_COUNT]) {
     for (uint8_t i = 0; i < APC_FADER_COUNT; i++) {
         out_values[i] = s_cc_val[i];
     }
+}
+
+uint16_t faders_get_hires(uint8_t fader_idx) {
+    if (fader_idx >= APC_FADER_COUNT) {
+        return 0U;
+    }
+    return s_hires_val[fader_idx];
 }

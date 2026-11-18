@@ -403,6 +403,40 @@ static int32_t call_builtin(lua_coro_t *c, uint8_t fn_id, uint8_t argc, const in
         return 0;
     }
 
+    case LUA_FN_FADER_HIRES: {
+        int32_t idx = args[0];
+        if (idx >= 0 && idx < (int32_t)APC_FADER_COUNT) {
+            return (int32_t)faders_get_hires((uint8_t)idx);
+        }
+        return 0;
+    }
+
+    case LUA_FN_PITCH_BEND: {
+        if ((apc_mode_get_flags() & APC_MODE_FLAG_MIDI) != 0U) {
+            uint8_t ch = (uint8_t)(args[0] & 0x0FU);
+            uint16_t v14 = (uint16_t)(args[1] & 0x3FFF);
+            usb_midi_send_event(USB_MIDI_CIN_PITCH_BEND,
+                                (uint8_t)(MIDI_STATUS_PITCH_BEND | ch), (uint8_t)(v14 & 0x7FU),
+                                (uint8_t)((v14 >> 7U) & 0x7FU));
+        }
+        return 0;
+    }
+
+    case LUA_FN_CC14: {
+        if ((apc_mode_get_flags() & APC_MODE_FLAG_MIDI) != 0U) {
+            uint8_t ch = (uint8_t)(args[0] & 0x0FU);
+            uint8_t cc = (uint8_t)(args[1] & 0x1FU);
+            uint16_t v14 = (uint16_t)(args[2] & 0x3FFF);
+            usb_midi_send_event(USB_MIDI_CIN_CONTROL_CHANGE,
+                                (uint8_t)(MIDI_STATUS_CONTROL_CHANGE | ch), cc,
+                                (uint8_t)((v14 >> 7U) & 0x7FU));
+            usb_midi_send_event(USB_MIDI_CIN_CONTROL_CHANGE,
+                                (uint8_t)(MIDI_STATUS_CONTROL_CHANGE | ch), (uint8_t)(cc + 32U),
+                                (uint8_t)(v14 & 0x7FU));
+        }
+        return 0;
+    }
+
     default:
         return 0;
     }
@@ -790,13 +824,13 @@ bool lua_vm_on_button(apc_btn_group_t group, uint8_t index, bool pressed, uint32
     return (consumed != 0);
 }
 
-void lua_vm_on_fader(uint8_t fader_idx, uint8_t value, uint32_t now_ticks) {
+void lua_vm_on_fader(uint8_t fader_idx, uint8_t value, uint16_t hires_value, uint32_t now_ticks) {
     if (fader_idx >= APC_FADER_COUNT) {
         return;
     }
     s_fader_vals[fader_idx] = value;
     if (s_enabled) {
-        run_sync_entry(12U, (int32_t)fader_idx, (int32_t)value, 0, now_ticks);
+        run_sync_entry(12U, (int32_t)fader_idx, (int32_t)value, (int32_t)hires_value, now_ticks);
     }
 }
 

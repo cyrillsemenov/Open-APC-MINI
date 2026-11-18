@@ -102,6 +102,10 @@ BUILTINS: dict[str, tuple[int, int]] = {
     "yield": (0x10, 0),
     "sleep_ms": (0x11, 1),
     "key_pulse": (0x12, 3),
+    "fader_hires": (0x13, 1),
+    "fader14": (0x13, 1),
+    "pitch_bend": (0x14, 2),
+    "cc14": (0x15, 3),
 }
 
 # SysEx Subcommands

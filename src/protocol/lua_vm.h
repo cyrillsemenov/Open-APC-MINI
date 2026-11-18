@@ -81,6 +81,9 @@
 #define LUA_FN_YIELD        0x10U // yield() -> suspends current coroutine slice
 #define LUA_FN_SLEEP_MS     0x11U // sleep_ms(ms) -> suspends coroutine for ms milliseconds
 #define LUA_FN_KEY_PULSE    0x12U // key_pulse(x, y, ms) -> fires key-down + async key-up after ms
+#define LUA_FN_FADER_HIRES  0x13U // fader_hires(idx) / fader14(idx) -> 0..16383
+#define LUA_FN_PITCH_BEND   0x14U // pitch_bend(ch, val14) -> 14-bit MIDI Pitch Bend
+#define LUA_FN_CC14         0x15U // cc14(ch, cc, val14) -> 14-bit MSB+LSB MIDI CC pair
 
 /*---------------------------------------------------------------------------
  * SysEx Upload Subcommands: F0 7D 'L' 'U' 'A' <cmd> ... F7
@@ -99,5 +102,5 @@ void lua_vm_set_enabled(bool enabled, uint32_t now_ticks);
 void lua_vm_toggle(uint32_t now_ticks);
 void lua_vm_task(uint32_t now_ticks);
 bool lua_vm_on_button(apc_btn_group_t group, uint8_t index, bool pressed, uint32_t now_ticks);
-void lua_vm_on_fader(uint8_t fader_idx, uint8_t value, uint32_t now_ticks);
+void lua_vm_on_fader(uint8_t fader_idx, uint8_t value, uint16_t hires_value, uint32_t now_ticks);
 void lua_vm_handle_sysex(const uint8_t *msg, uint16_t len);
