@@ -67,6 +67,18 @@ static bool write_bootloader_magic_page(uint32_t page_addr) {
     return true;
 }
 
+void bootloader_enter_dfu(void) {
+    write_bootloader_magic_page((uint32_t)(uintptr_t)_boot_magic_page);
+
+    // Pull PA8 LOW so the host OS detects a clean USB disconnect before DFU re-enumeration
+    board_usb_dp_pullup(false);
+    for (volatile uint32_t d = 0; d < 400000; d++) {}
+
+    __asm__ volatile("dsb 0xF" ::: "memory");
+    scb_reset_system();
+    while (1) {}
+}
+
 void bootloader_check_unlock_packet(const uint8_t pkt[64]) {
     if (pkt[1] != MIDI_STATUS_SYSEX_START) {
         return;
@@ -97,11 +109,5 @@ void bootloader_check_unlock_packet(const uint8_t pkt[64]) {
     // Settle ~2 ms at 48 MHz so the USB ACK completes on the wire
     for (volatile uint32_t d = 0; d < 20000; d++) {}
 
-    // Pull PA8 LOW so the host OS detects a clean USB disconnect before DFU re-enumeration
-    board_usb_dp_pullup(false);
-    for (volatile uint32_t d = 0; d < 400000; d++) {}
-
-    __asm__ volatile("dsb 0xF" ::: "memory");
-    scb_reset_system();
-    while (1) {}
+    bootloader_enter_dfu();
 }

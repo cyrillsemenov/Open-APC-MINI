@@ -86,6 +86,7 @@ class STM32F102Harness:
         self.flash_unlocked = False
         self.illegal_flash_write: int | None = None
         self.fault_pc: int | None = None
+        self.allow_fault_recovery = False
         self.reset_requested = False
 
         # TM1629 serial bit-bang state (PB12=STB, PB13=CLK, PB14=DIO)
@@ -165,6 +166,8 @@ class STM32F102Harness:
             self.regs[0x4002200C] = self.regs.get(0x4002200C, 0) | 0x20  # FLASH_SR_EOP
 
     def _on_fault(self, uc: u.Uc, addr: int, size: int, data: object) -> None:
+        if self.allow_fault_recovery:
+            return
         self.fault_pc = addr
         uc.emu_stop()
 
@@ -906,6 +909,31 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
     ok(
         "DFU unlock & system reset",
         "0x08007C00 magic written, ACK 0x15 sent, PA8 LOW, SYSRESETREQ",
+    )
+
+    # 10. Fault-Handler Self-Healing DFU Recovery (even with corrupted MSP)
+    mcu.uc.mem_write(BOOT_MAGIC_ADDR, b"\xff" * 0x400)
+    mcu._update_gpio_odr(0, mcu.gpio_odr[0] | (1 << 8))
+    mcu.reset_requested = False
+    mcu.allow_fault_recovery = True
+    # Corrupt MSP to an unmapped address (0x2000FF00) before invoking HardFault (vec #3)
+    mcu.uc.reg_write(UC_ARM_REG_MSP, 0x2000FF00)
+    mcu.uc.reg_write(UC_ARM_REG_SP, 0x2000FF00)
+    mcu.call_isr(3)
+
+    fault_magic = bytes(mcu.uc.mem_read(BOOT_MAGIC_ADDR, 8))
+    check(
+        fault_magic == BOOT_MAGIC,
+        f"Fault handler did not program DFU magic at 0x{BOOT_MAGIC_ADDR:08X}: {fault_magic.hex(' ')}",
+    )
+    check(
+        (mcu.gpio_odr[0] & (1 << 8)) == 0,
+        "Fault handler did not pull PA8 (USB D+) LOW before DFU reset",
+    )
+    check(mcu.reset_requested, "Fault handler did not trigger SCB->AIRCR SYSRESETREQ")
+    ok(
+        "Fault-handler DFU recovery",
+        "NMI/HardFault/MemManage/BusFault/UsageFault reset MSP -> 0x08007C00 DFU reboot",
     )
 
 

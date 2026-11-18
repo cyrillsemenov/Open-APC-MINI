@@ -103,6 +103,12 @@ BROKEN_CASES: list[BrokenCase] = [
         c_stub="void __wrap_bootloader_check_unlock_packet(const void *p) { (void)p; }",
         expected_err="Bootloader magic not programmed at 0x08007C00",
     ),
+    BrokenCase(
+        name="broken_fault_recovery",
+        wrap_symbol="bootloader_enter_dfu",
+        c_stub="void __wrap_bootloader_enter_dfu(void) {}",
+        expected_err="Fault handler did not program DFU magic at 0x08007C00",
+    ),
 ]
 
 
