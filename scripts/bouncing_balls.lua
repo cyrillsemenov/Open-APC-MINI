@@ -3,9 +3,9 @@
 --
 -- Press any pad (x, y) to launch/toggle a bouncing particle in column x.
 -- Balls bounce between the top (y=0) and bottom (y=7) walls AND bounce off
--- any pad lit by serialosc/Ableton (host_led(x, y) > 0), firing real
--- serialosc mext grid_key(x, y, 1/0) and MIDI notes on every bounce!
---Hold SHIFT + press a pad to clear that column's ball.
+-- any pad lit by serialosc/Ableton (host_led(x, y) > 0), firing async 50 ms
+-- gated serialosc mext keys / MIDI notes via key_pulse(x, y, 50) on every bounce!
+-- Hold SHIFT + press a pad to clear that column's ball.
 
 function init()
     for x = 0, 7 do
@@ -51,8 +51,7 @@ function on_tick(step)
                 ny = y + dy
                 if ny < 0 then ny = 0 end
                 if ny > 7 then ny = 7 end
-                grid_key(x, y, 1)
-                grid_key(x, y, 0)
+                key_pulse(x, y, 50)
                 led(x, y, 15)
             else
                 led(x, y, 4)

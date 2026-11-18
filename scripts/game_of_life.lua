@@ -1,14 +1,12 @@
 -- scripts/game_of_life.lua
 -- Live Conway's Game of Life Generative Co-Processor for serialosc & MIDI.
 --
--- Runs alongside serialosc/MIDI at < 0.5% CPU using the hardware-accelerated
--- life_step() intrinsic:
---   - Starts with a glider + blinker and auto-reseeds if the colony dies out.
---   - Newly born cells (Red, level 15) trigger Note-On / mext key-down on EVERY
---     generation and Note-Off on the next generation (musical 1-step gate!).
+-- Runs in the time-sliced async coroutine VM (< 70 us/slice):
+--   - Uses life_step() + key_pulse(x, y, 55) so newly born cells (Red, level 15)
+--     fire an async 55 ms gated note/key automatically without blocking!
 --   - Surviving cells glow Green (level 5).
 --   - Press any pad while playing to seed live cells around your finger.
---   - Fader 9 (Master) controls evolution & note tempo (40..160 ms).
+--   - Fader 9 (Master) controls evolution & note tempo (40..167 ms).
 
 function init()
     mem[1] = 1
@@ -45,15 +43,10 @@ function on_tick(step)
         local x = i & 7
         local y = i >> 3
 
-        -- End the previous step's birth note gate cleanly
-        if prev == 2 and st ~= 2 then
-            grid_key(x, y, 0)
-        end
-
         mem[i] = st
         if st == 2 then
             led(x, y, 15)
-            grid_key(x, y, 1)
+            key_pulse(x, y, 55)
         elseif st == 1 then
             led(x, y, 5)
         else

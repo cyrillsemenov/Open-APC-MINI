@@ -11,8 +11,8 @@ static bool s_round_blink_phase[2] = {false, false};
 static bool s_pad_blink_phase = false;
 
 static uint8_t s_mux_slot = 0;
+static uint8_t s_isr_mux_div = 0;
 static bool s_timers_initialized = false;
-static uint32_t s_last_mux_tick = 0;
 static uint32_t s_last_blink_tick = 0;
 
 static void write_round_hw_bit(apc_round_led_group_t group, uint8_t bit_idx, bool lit) {
@@ -104,10 +104,11 @@ void leds_init(void) {
     s_round_blink_phase[1] = false;
     s_pad_blink_phase = false;
     s_mux_slot = 0;
+    s_isr_mux_div = 0;
     s_timers_initialized = false;
-
     GPIO_BSRR(APC_ROUND_ANODE_PORT) = ((uint32_t)APC_ROUND_ANODE_MASK << 16);
     GPIO_BSRR(APC_ROUND_SINK_PORT) = (uint32_t)APC_ROUND_SINK_MASK;
+    mux_round_leds_step();
 }
 
 void leds_set_pad(uint8_t row, uint8_t col, apc_pad_led_mode_t mode, uint32_t now_ticks) {
@@ -188,22 +189,21 @@ void leds_all_off(uint32_t now_ticks) {
     tm1629_schedule_flush(now_ticks, false);
 }
 
+void leds_isr_mux_tick(void) {
+    if (++s_isr_mux_div >= APC_ROUND_MUX_TICKS) {
+        s_isr_mux_div = 0;
+        mux_round_leds_step();
+    }
+}
+
 void leds_task(uint32_t now_ticks) {
     if (!s_timers_initialized) {
         s_timers_initialized = true;
-        s_last_mux_tick = now_ticks;
         s_last_blink_tick = now_ticks;
-        mux_round_leds_step();
         refresh_blink_phase(now_ticks);
-    } else {
-        if ((uint32_t)(now_ticks - s_last_mux_tick) >= APC_ROUND_MUX_TICKS) {
-            s_last_mux_tick = now_ticks;
-            mux_round_leds_step();
-        }
-        if ((uint32_t)(now_ticks - s_last_blink_tick) >= APC_BLINK_HALF_PERIOD_TICKS) {
-            s_last_blink_tick = now_ticks;
-            refresh_blink_phase(now_ticks);
-        }
+    } else if ((uint32_t)(now_ticks - s_last_blink_tick) >= APC_BLINK_HALF_PERIOD_TICKS) {
+        s_last_blink_tick = now_ticks;
+        refresh_blink_phase(now_ticks);
     }
 
     tm1629_task(now_ticks);

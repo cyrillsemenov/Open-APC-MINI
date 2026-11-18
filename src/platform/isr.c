@@ -3,6 +3,7 @@
 #include <libopencm3/cm3/vector.h>
 #include "board.h"
 #include "bootloader.h"
+#include "leds.h"
 #include "usb_midi.h"
 
 #define NAKED_FAULT_TO_DFU()                                                                       \
@@ -47,6 +48,7 @@ void pend_sv_handler(void) {}
 
 void sys_tick_handler(void) {
     board_tick_inc();
+    leds_isr_mux_tick();
 }
 
 void usb_lp_can_rx0_isr(void) {

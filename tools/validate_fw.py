@@ -1087,7 +1087,7 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
     custom_lua = """
     function on_grid(x, y, z)
         if z == 1 then
-            grid_key(7, 7, 1)
+            key_pulse(7, 7, 10)
             return 1
         end
         return 0
@@ -1099,7 +1099,8 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         mcu.run_steps(40_000)
         mcu.usb_poll_ep1_in()
 
-    # Press top-left pad (0, 0): custom script intercepts it (returns 1) and emits (7, 7) -> 21 07 07
+    # Press top-left pad (0, 0): custom script intercepts it (returns 1) and fires key_pulse(7, 7, 10)
+    # -> immediate 21 07 07 (key-down), followed by async 20 07 07 (key-up) after 10 ms (20 SysTicks)
     mcu.pressed_buttons = {(0, 0)}
     intercept_pkts: list[bytes] = []
     for _ in range(6):
@@ -1112,14 +1113,15 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         for _ in range(8):
             mcu.call_isr(VEC_SYSTICK)
         mcu.run_steps(20_000)
+        intercept_pkts.extend(mcu.usb_poll_ep1_in())
     intercept_stream = b"".join(p[2:] for p in intercept_pkts if len(p) > 2)
     check(
-        intercept_stream == b"\x21\x07\x07",
-        f"Live-uploaded Lua script did not intercept (0,0) -> (21 07 07): {intercept_stream.hex(' ')}",
+        intercept_stream.startswith(b"\x21\x07\x07\x20\x07\x07"),
+        f"Live-uploaded Lua script did not intercept (0,0) -> async key_pulse (21 07 07 20 07 07): {intercept_stream.hex(' ')}",
     )
     ok(
         "Lua Co-Processor (SHIFT+SCENE 3)",
-        "pass-through + generative mext echo, LED overlay, live bytecode upload",
+        "async time-sliced VM, key_pulse gate queue, LED overlay, live bytecode upload",
     )
 
     # 11. Bootloader DFU Unlock & Reset
