@@ -5,6 +5,7 @@
 #include "buttons.h"
 #include "faders.h"
 #include "leds.h"
+#include "lua_vm.h"
 #include "monome_mode.h"
 #include "usb_midi.h"
 
@@ -24,10 +25,18 @@ static void app_on_button(apc_btn_group_t group, uint8_t index, bool pressed) {
             usb_switch_profile(USB_PROFILE_MONOME_FTDI);
             return;
         }
+        if (index == 2U) {
+            lua_vm_toggle(s_loop_now);
+            return;
+        }
         if (index == 7U) {
             bootloader_enter_dfu();
             return;
         }
+    }
+
+    if (lua_vm_on_button(group, index, pressed, s_loop_now)) {
+        return;
     }
 
     if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
@@ -38,6 +47,7 @@ static void app_on_button(apc_btn_group_t group, uint8_t index, bool pressed) {
 }
 
 static void app_on_fader(uint8_t fader_idx, uint8_t value) {
+    lua_vm_on_fader(fader_idx, value, s_loop_now);
     if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
         monome_mode_on_fader(fader_idx, value);
     } else {
@@ -66,6 +76,7 @@ int main(void) {
         monome_mode_init(board_ticks());
     }
     faders_init();
+    lua_vm_init(board_ticks());
     board_watchdog_init();
 
     while (1) {
@@ -80,7 +91,8 @@ int main(void) {
         } else {
             apc_mode_poll_rx(now);
         }
-        leds_task(now);
+        lua_vm_task(board_ticks());
+        leds_task(board_ticks());
         usb_midi_flush_tx();
         board_record_loop_turn(board_ticks() - now);
     }

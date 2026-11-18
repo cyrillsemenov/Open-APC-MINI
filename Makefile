@@ -121,7 +121,8 @@ APP_SRCS := \
 	src/usb/usb_midi.c \
 	src/protocol/sysex.c \
 	src/protocol/apc_mode.c \
-	src/protocol/monome_mode.c
+	src/protocol/monome_mode.c \
+	src/protocol/lua_vm.c
 
 OBJS := $(patsubst src/%.c,$(BUILD_DIR)/obj/%.o,$(APP_SRCS))
 

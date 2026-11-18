@@ -4,6 +4,7 @@
 #include "bootloader.h"
 #include "buttons.h"
 #include "faders.h"
+#include "lua_vm.h"
 #include "sysex.h"
 #include "usb_midi.h"
 
@@ -188,6 +189,12 @@ void sysex_handle_msg(const uint8_t *msg, uint16_t len) {
     if (len == 8U && msg[1] == 0x75U && msg[2] == 0x7FU && msg[3] == 0x75U && msg[4] == 0x54U &&
         msg[5] == 0x00U && msg[6] == 0x00U) {
         bootloader_enter_dfu();
+        return;
+    }
+
+    // Lua Co-Processor SysEx: F0 7D 'L' 'U' 'A' <cmd> ... F7
+    if (len >= 7U && msg[1] == 0x7DU && msg[2] == 0x4CU && msg[3] == 0x55U && msg[4] == 0x41U) {
+        lua_vm_handle_sysex(msg, len);
         return;
     }
 

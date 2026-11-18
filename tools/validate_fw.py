@@ -1042,7 +1042,87 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         "FTDI vendor reqs, mext /sys, top-left (0,0) keys, varibright+intensity, fader tilt",
     )
 
-    # 10. Bootloader DFU Unlock & Reset
+    # 10. On-Chip Lua Co-Processor alongside serialosc (SHIFT + SCENE 3 + live upload)
+    # Toggle Lua Co-Processor ON: Hold Shift (col=10, row=0) + Scene 3 (col=9, row=2)
+    mcu.pressed_buttons = {(10, 0), (9, 2)}
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(40_000)
+    mcu.pressed_buttons.clear()
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(20_000)
+    mcu.usb_poll_ep1_in()
+
+    # Press top-left pad (col=0, row=0 -> Monome x=0, y=0) while Lua Co-Processor is active:
+    # 1) Normal key press (21 00 00) passes through to serialosc
+    # 2) Built-in bouncy_echo.lua spawns a ripple and fires an echoed key event (21 01 00, 20 01 00) on tick!
+    mcu.pressed_buttons = {(0, 0)}
+    lua_pkts: list[bytes] = []
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(30_000)
+        lua_pkts.extend(mcu.usb_poll_ep1_in())
+    mcu.pressed_buttons.clear()
+
+    # Advance 140 SysTicks (> 55 ms tempo) so lua_vm_task runs on_tick(0)
+    for _ in range(10):
+        for _ in range(14):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(40_000)
+        lua_pkts.extend(mcu.usb_poll_ep1_in())
+
+    lua_stream = b"".join(p[2:] for p in lua_pkts if len(p) > 2)
+    check(
+        b"\x21\x00\x00" in lua_stream and b"\x21\x01\x00\x20\x01\x00" in lua_stream,
+        f"Lua Co-Processor did not emit pass-through (21 00 00) + echoed mext key (21 01 00 20 01 00): {lua_stream.hex(' ')}",
+    )
+
+    # Test live Lua bytecode upload over FTDI serial (EP2 OUT)
+    from tools.lua_compiler import build_upload_sysex_packets, compile_lua_source
+
+    custom_lua = """
+    function on_grid(x, y, z)
+        if z == 1 then
+            grid_key(7, 7, 1)
+            return 1
+        end
+        return 0
+    end
+    """
+    upload_pkts = build_upload_sysex_packets(compile_lua_source(custom_lua), save_to_flash=False)
+    for upkt in upload_pkts:
+        mcu.usb_ep_out(2, bytes(upkt))
+        mcu.run_steps(40_000)
+        mcu.usb_poll_ep1_in()
+
+    # Press top-left pad (0, 0): custom script intercepts it (returns 1) and emits (7, 7) -> 21 07 07
+    mcu.pressed_buttons = {(0, 0)}
+    intercept_pkts: list[bytes] = []
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(30_000)
+        intercept_pkts.extend(mcu.usb_poll_ep1_in())
+    mcu.pressed_buttons.clear()
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(20_000)
+    intercept_stream = b"".join(p[2:] for p in intercept_pkts if len(p) > 2)
+    check(
+        intercept_stream == b"\x21\x07\x07",
+        f"Live-uploaded Lua script did not intercept (0,0) -> (21 07 07): {intercept_stream.hex(' ')}",
+    )
+    ok(
+        "Lua Co-Processor (SHIFT+SCENE 3)",
+        "pass-through + generative mext echo, LED overlay, live bytecode upload",
+    )
+
+    # 11. Bootloader DFU Unlock & Reset
     unlock_req = bytes(
         [0x04, 0xF0, 0x5A, 0x57, 0x04, 0x6E, 0x28, 0x3C, 0x07, 0x4E, 0x3E, 0xF7]
     )

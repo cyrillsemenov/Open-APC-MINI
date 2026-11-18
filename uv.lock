@@ -3,10 +3,20 @@ revision = 3
 requires-python = ">=3.11"
 
 [[package]]
+name = "antlr4-python3-runtime"
+version = "4.13.2"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/33/5f/2cdf6f7aca3b20d3f316e9f505292e1f256a32089bd702034c29ebde6242/antlr4_python3_runtime-4.13.2.tar.gz", hash = "sha256:909b647e1d2fc2b70180ac586df3933e38919c85f98ccc656a96cd3f25ef3916", size = 117467, upload-time = "2024-08-03T19:00:12.757Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/89/03/a851e84fcbb85214dc637b6378121ef9a0dd61b4c65264675d8a5c9b1ae7/antlr4_python3_runtime-4.13.2-py3-none-any.whl", hash = "sha256:fe3835eb8d33daece0e799090eda89719dbccee7aa39ef94eed3818cafa5a7e8", size = 144462, upload-time = "2024-08-03T19:00:11.134Z" },
+]
+
+[[package]]
 name = "apc"
 version = "0.2.1"
 source = { editable = "." }
 dependencies = [
+    { name = "luaparser" },
     { name = "mido" },
     { name = "python-rtmidi" },
     { name = "unicorn" },
@@ -14,9 +24,23 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "luaparser", specifier = ">=4.2.0" },
     { name = "mido", specifier = ">=1.3.3" },
     { name = "python-rtmidi", specifier = ">=1.5.8" },
     { name = "unicorn", specifier = ">=2.1.4" },
+]
+
+[[package]]
+name = "luaparser"
+version = "4.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "antlr4-python3-runtime" },
+    { name = "multimethod" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/24/64/574e8dadf7dcc08b5c8435756b6a44ea382d14b4d3c19669dbbab112532f/luaparser-4.2.0.tar.gz", hash = "sha256:315e1588b23500befaf824604c2d0ea75daf894b5507126636a8cfa9dc3d7636", size = 62053, upload-time = "2026-08-29T18:14:42.264Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5f/49/6d585ffffd47732c497ca3a4137f20b817fdf41598668619652d8b11d7e2/luaparser-4.2.0-py3-none-any.whl", hash = "sha256:f73b1a66ff51351d28f067348ebbb4533401fc761926654d0448e34531ce3a34", size = 68950, upload-time = "2026-08-29T18:14:41.202Z" },
 ]
 
 [[package]]
@@ -29,6 +53,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/23/14/cfda3fe61ce4c0f50a9f707ae02b46cb53211732b2cd4522bf06272848f4/mido-1.3.3.tar.gz", hash = "sha256:1aecb30b7f282404f17e43768cbf74a6a31bf22b3b783bdd117a1ce9d22cb74c", size = 124288, upload-time = "2024-10-25T15:05:21.847Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/fd/28/45deb15c11859d2f10702b32e71de9328a9fa494f989626916db39a9617f/mido-1.3.3-py3-none-any.whl", hash = "sha256:01033c9b10b049e4436fca2762194ca839b09a4334091dd3c34e7f4ae674fd8a", size = 54614, upload-time = "2024-10-25T15:05:20.349Z" },
+]
+
+[[package]]
+name = "multimethod"
+version = "2.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cb/5c/556c53f25a75c7ec1b467a5871a22461615139dab72578166df7f8ad1104/multimethod-2.1.tar.gz", hash = "sha256:c59e75fbe51516ed632d3df4b56df0876747be001c068d3ee1e83e9f65c2846f", size = 16016, upload-time = "2026-07-29T00:31:35.523Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a7/9e/3538af4267d2e29d871e7a1ae390e8ff32122b3c560fe718569c4cd7624a/multimethod-2.1-py3-none-any.whl", hash = "sha256:54b5256562351762a275dd65571b5d6db750848f1eb6bb21c61cb5ff2748b663", size = 9529, upload-time = "2026-07-29T00:31:34.367Z" },
 ]
 
 [[package]]

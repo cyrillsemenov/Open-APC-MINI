@@ -115,6 +115,12 @@ BROKEN_CASES: list[BrokenCase] = [
         c_stub="void __wrap_monome_mode_poll_rx(unsigned int t) { (void)t; }",
         expected_err="Missing 2-byte FTDI status header",
     ),
+    BrokenCase(
+        name="broken_lua_vm",
+        wrap_symbol="lua_vm_toggle",
+        c_stub="void __wrap_lua_vm_toggle(unsigned int t) { (void)t; }",
+        expected_err="Lua Co-Processor did not emit pass-through",
+    ),
 ]
 
 
