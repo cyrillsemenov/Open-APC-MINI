@@ -148,18 +148,31 @@ static void refresh_all_pad_leds(uint32_t now_ticks) {
     }
 }
 
-void monome_mode_refresh_status_leds(void) {
-    leds_set_round(APC_ROUND_GROUP_SCENE, 2U,
-                   lua_vm_is_enabled() ? APC_ROUND_LED_ON : APC_ROUND_LED_OFF);
-}
-
 static void set_grid_pad_level(uint8_t x, uint8_t y, uint8_t level, uint32_t now_ticks) {
-    if (x >= 8U || y >= 8U) {
+    if (x >= 8U || y >= 8U || (apc_mode_get_flags() & APC_MODE_FLAG_SERIALOSC) == 0U) {
         return;
     }
     s_grid_level[y][x] = level;
     apc_mode_clear_pad_mode(x, y);
     monome_mode_refresh_pad(x, y, now_ticks);
+}
+
+uint8_t monome_mode_get_palette(void) {
+    return s_palette;
+}
+
+void monome_mode_set_palette(uint8_t palette, uint32_t now_ticks) {
+    s_palette = (uint8_t)(palette & 0x03U);
+    refresh_all_pad_leds(now_ticks);
+}
+
+uint8_t monome_mode_get_brightness(void) {
+    return s_bright_idx;
+}
+
+void monome_mode_set_brightness(uint8_t bright_idx, uint32_t now_ticks) {
+    s_bright_idx = (uint8_t)(bright_idx & 0x03U);
+    leds_set_brightness(k_bright_levels[s_bright_idx], now_ticks);
 }
 
 static uint8_t cmd_payload_len(uint8_t cmd) {
@@ -431,7 +444,6 @@ void monome_mode_init(uint32_t now_ticks) {
 
     leds_all_off(now_ticks);
     leds_set_brightness(k_bright_levels[s_bright_idx], now_ticks);
-    monome_mode_refresh_status_leds();
 }
 
 void monome_mode_set_overlay_led(uint8_t x, uint8_t y, uint8_t level, uint32_t now_ticks) {
@@ -491,26 +503,12 @@ void monome_mode_send_tilt(uint8_t sensor, int16_t x, int16_t y, int16_t z) {
 }
 
 void monome_mode_on_button(apc_btn_group_t group, uint8_t index, bool pressed, uint32_t now_ticks) {
-    if (group == APC_BTN_GROUP_GRID) {
-        if (index >= 64U) {
-            return;
-        }
+    (void)now_ticks;
+    if (group == APC_BTN_GROUP_GRID && index < 64U) {
         // APC grid index 0 is bottom-left (row=7, col=0); Monome (0,0) is top-left
         uint8_t x = (uint8_t)(index & 7U);
         uint8_t y = (uint8_t)(7U - (index >> 3U));
         monome_mode_send_key(x, y, pressed);
-        return;
-    }
-
-    if (group == APC_BTN_GROUP_TRACK && buttons_shift_pressed() && pressed && index < 8U) {
-        if (index < 4U) {
-            s_palette = index;
-            refresh_all_pad_leds(now_ticks);
-        } else {
-            s_bright_idx = (uint8_t)(index - 4U);
-            leds_set_brightness(k_bright_levels[s_bright_idx], now_ticks);
-        }
-        monome_mode_refresh_status_leds();
     }
 }
 
