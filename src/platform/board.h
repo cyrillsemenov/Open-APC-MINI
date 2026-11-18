@@ -23,3 +23,15 @@ uint32_t board_ticks(void);
 
 // Drives PA8 USB D+ 1.5 kOhm pull-up HIGH (attach) or LOW (detach).
 void board_usb_dp_pullup(bool enable);
+
+// Returns RCC_CSR[31:24] reset-cause flags captured at boot before clearing RMVF.
+uint8_t board_reset_flags(void);
+
+// Records a completed main-loop iteration and its duration in 0.5 ms SysTick units.
+void board_record_loop_turn(uint32_t elapsed_ticks);
+
+// Returns total main-loop iterations since boot.
+uint32_t board_loop_count(void);
+
+// Returns worst-case main-loop turnaround time in 0.5 ms SysTick units.
+uint16_t board_max_loop_ticks(void);

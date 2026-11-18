@@ -105,9 +105,9 @@ BROKEN_CASES: list[BrokenCase] = [
     ),
     BrokenCase(
         name="broken_fault_recovery",
-        wrap_symbol="bootloader_enter_dfu",
-        c_stub="void __wrap_bootloader_enter_dfu(void) {}",
-        expected_err="Fault handler did not program DFU magic at 0x08007C00",
+        wrap_symbol="bootloader_fault_dfu",
+        c_stub="void __wrap_bootloader_fault_dfu(unsigned int msp, unsigned int ipsr) { (void)msp; (void)ipsr; }",
+        expected_err="Black-box crash log at 0x08007800 did not capture exception frame",
     ),
 ]
 

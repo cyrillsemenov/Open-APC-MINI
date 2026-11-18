@@ -109,9 +109,10 @@ class STM32F102Harness:
         self.uc.mem_map(SRAM_BASE, SRAM_SIZE)
         self.uc.mem_map(PMA_BASE, 0x1000)
 
-        # STM32 System Memory / Electronic Signature (DESIG_FLASH_SIZE = 128 KB at 0x1FFFF7E0)
+        # STM32 System Memory / Electronic Signature (DESIG_FLASH_SIZE = 128 KB at 0x1FFFF7E0, UID0 at 0x1FFFF7E8)
         self.uc.mem_map(0x1FFFF000, 0x1000)
         self.uc.mem_write(0x1FFFF7E0, struct.pack("<H", 128))
+        self.uc.mem_write(0x1FFFF7E8, struct.pack("<I", 0x10016410))
 
         # APB1 (before PMA), APB1/APB2/AHB (after PMA), Bit-Band alias, and Cortex-M3 PPB
         self.uc.mmio_map(
@@ -885,7 +886,30 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
     )
     ok("LED drivers", "TM1629 bit-bang (0x40, 0xC0+16B, 0x8F) & round LED mux")
 
-    # 9. Bootloader DFU Unlock & Reset
+    # 9. Diagnostic Telemetry SysEx (F0 7D 'A' 'P' 'C' 01 F7)
+    from tools.fw_debug import APC_CRASH_MAGIC, decode_diag_nibbles
+
+    # USB-MIDI packetized F0 7D 'A' 'P' 'C' 01 F7:
+    #   [0x04, 0xF0, 0x7D, 'A', 0x04, 'P', 'C', 0x01, 0x05, 0xF7, 0x00, 0x00]
+    diag_req = bytes([0x04, 0xF0, 0x7D, 0x41, 0x04, 0x50, 0x43, 0x01, 0x05, 0xF7, 0x00, 0x00])
+    mcu.usb_ep1_out(diag_req)
+    diag_pkts: list[bytes] = []
+    for _ in range(8):
+        mcu.run_steps(20_000)
+        diag_pkts.extend(mcu.usb_poll_ep1_in())
+    diag_sysex = extract_usb_midi_sysex(diag_pkts)
+    subcmd, telem_bytes = decode_diag_nibbles(diag_sysex)
+    check(
+        subcmd == 0x01 and len(telem_bytes) == 28,
+        f"Bad diagnostic telemetry reply (subcmd={subcmd}, len={len(telem_bytes)})",
+    )
+    _, _, flash_kb, idcode, _, loop_cnt, _ = struct.unpack("<BBHIIIH", telem_bytes[:18])
+    check(
+        flash_kb == 128 and idcode == 0x10016410 and loop_cnt > 0,
+        f"Unexpected telemetry values: flash_kb={flash_kb}, idcode=0x{idcode:08X}, loops={loop_cnt}",
+    )
+
+    # 10. Bootloader DFU Unlock & Reset
     unlock_req = bytes(
         [0x04, 0xF0, 0x5A, 0x57, 0x04, 0x6E, 0x28, 0x3C, 0x07, 0x4E, 0x3E, 0xF7]
     )
@@ -905,18 +929,60 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         (mcu.gpio_odr[0] & (1 << 8)) == 0,
         "PA8 (USB D+) was not pulled LOW before DFU reset",
     )
+    check(
+        mcu.tm_display == b"\x00" * 16,
+        f"TM1629 display RAM was not cleared to all-zero before DFU reboot: {mcu.tm_display}",
+    )
     check(mcu.reset_requested, "SCB->AIRCR SYSRESETREQ was not triggered")
     ok(
         "DFU unlock & system reset",
         "0x08007C00 magic written, ACK 0x15 sent, PA8 LOW, SYSRESETREQ",
     )
 
-    # 10. Fault-Handler Self-Healing DFU Recovery (even with corrupted MSP)
+    # 11. Fault-Handler Black-Box Crash Log (0x08007800) & Self-Healing DFU Recovery
+    CRASH_LOG_ADDR = 0x08007800
     mcu.uc.mem_write(BOOT_MAGIC_ADDR, b"\xff" * 0x400)
+    mcu.uc.mem_write(CRASH_LOG_ADDR, b"\xff" * 0x400)
     mcu._update_gpio_odr(0, mcu.gpio_odr[0] | (1 << 8))
     mcu.reset_requested = False
     mcu.allow_fault_recovery = True
-    # Corrupt MSP to an unmapped address (0x2000FF00) before invoking HardFault (vec #3)
+
+    # 11a. Test HardFault with a stacked Cortex-M3 exception frame on MSP (0x200017C0)
+    fake_msp = 0x200017C0
+    fake_frame = struct.pack(
+        "<8I",
+        0x11111111,  # R0
+        0x22222222,  # R1
+        0x33333333,  # R2
+        0x44444444,  # R3
+        0x55555555,  # R12
+        0x08002555,  # LR
+        0x08002AAA,  # PC
+        0x01000000,  # xPSR
+    )
+    mcu.uc.mem_write(fake_msp, fake_frame)
+    mcu.regs[0xE000ED28] = 0x00008200  # SCB->CFSR: PRECISERR | BFARVALID
+    mcu.regs[0xE000ED2C] = 0x40000000  # SCB->HFSR: FORCED
+    mcu.regs[0xE000ED38] = 0x08008000  # SCB->BFAR: faulting address
+    mcu.uc.reg_write(UC_ARM_REG_MSP, fake_msp)
+    mcu.uc.reg_write(UC_ARM_REG_SP, fake_msp)
+    mcu.call_isr(3)
+
+    crash_words = struct.unpack("<12I", mcu.uc.mem_read(CRASH_LOG_ADDR, 48))
+    check(
+        crash_words[0] == APC_CRASH_MAGIC
+        and crash_words[2] == fake_msp
+        and crash_words[3] == 0x00008200
+        and crash_words[5] == 0x08008000
+        and crash_words[9] == 0x08002555
+        and crash_words[10] == 0x08002AAA,
+        f"Black-box crash log at 0x08007800 did not capture exception frame: {[hex(w) for w in crash_words]}",
+    )
+
+    # 11b. Test HardFault when MSP is completely corrupted/unmapped (0x2000FF00)
+    mcu.uc.mem_write(BOOT_MAGIC_ADDR, b"\xff" * 0x400)
+    mcu._update_gpio_odr(0, mcu.gpio_odr[0] | (1 << 8))
+    mcu.reset_requested = False
     mcu.uc.reg_write(UC_ARM_REG_MSP, 0x2000FF00)
     mcu.uc.reg_write(UC_ARM_REG_SP, 0x2000FF00)
     mcu.call_isr(3)
@@ -932,8 +998,8 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
     )
     check(mcu.reset_requested, "Fault handler did not trigger SCB->AIRCR SYSRESETREQ")
     ok(
-        "Fault-handler DFU recovery",
-        "NMI/HardFault/MemManage/BusFault/UsageFault reset MSP -> 0x08007C00 DFU reboot",
+        "Black-box crash log & DFU recovery",
+        "0x08007800 crash dump (PC/LR/CFSR/BFAR), SysEx telemetry, corrupted-MSP DFU reboot",
     )
 
 

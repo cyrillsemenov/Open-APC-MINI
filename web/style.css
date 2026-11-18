@@ -312,6 +312,65 @@ button.primary {
     display: none !important;
 }
 
+.crash-box {
+    margin-top: 10px;
+    padding: 8px 10px;
+    border: 2px solid var(--red);
+    background: #fff5f5;
+}
+
+.crash-box.clean {
+    border: 1px solid #999999;
+    background: #f5fbf5;
+}
+
+.crash-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 6px;
+    font-family: var(--mono);
+    font-size: 0.85rem;
+    color: var(--red);
+}
+
+.crash-box.clean .crash-header {
+    color: var(--green);
+}
+
+.crash-pre,
+.peek-pre {
+    margin: 0;
+    padding: 6px 8px;
+    background: #ffffff;
+    border: 1px solid #cccccc;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    line-height: 1.35;
+    overflow-x: auto;
+    white-space: pre;
+}
+
+.peek-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 10px;
+}
+
+.peek-pre {
+    margin-top: 6px;
+}
+
+.preset-btn {
+    font-family: var(--mono);
+    font-size: 0.76rem;
+    padding: 2px 6px;
+}
+
 .prose p {
     margin: 0 0 12px;
     color: #000000;

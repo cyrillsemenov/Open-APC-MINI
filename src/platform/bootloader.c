@@ -5,6 +5,7 @@
 #include "apc_protocol.h"
 #include "board.h"
 #include "bootloader.h"
+#include "leds.h"
 #include "usb_midi.h"
 
 // USB-MIDI packetized DFU unlock request: F0 5A 57 6E 28 3C 4E 3E F7
@@ -26,6 +27,8 @@ static const uint8_t k_updater_unlock_req[12] = {
 // 8-byte bootloader flag expected at 0x08007C00: 55 5A A5 AA 59 95 3A A3 (little-endian words)
 #define BOOT_MAGIC_WORD0 0xAAA55A55UL
 #define BOOT_MAGIC_WORD1 0xA33A9559UL
+
+uint32_t g_fault_stack[64];
 
 static bool write_bootloader_magic_page(uint32_t page_addr) {
     if ((page_addr & 0x3FFUL) != 0) {
@@ -67,7 +70,45 @@ static bool write_bootloader_magic_page(uint32_t page_addr) {
     return true;
 }
 
+static void write_crash_log_page(const apc_crash_log_t *log) {
+    uint32_t page_addr = (uint32_t)(uintptr_t)_crash_log_page;
+    if ((page_addr & 0x3FFUL) != 0) {
+        return;
+    }
+
+    flash_unlock();
+    flash_clear_status_flags();
+    flash_erase_page(page_addr);
+
+    if ((FLASH_SR & (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) == 0) {
+        const uint32_t *words = (const uint32_t *)log;
+        uint32_t count = (uint32_t)(sizeof(apc_crash_log_t) / sizeof(uint32_t));
+        for (uint32_t i = 0; i < count; i++) {
+            flash_program_word(page_addr + (i * 4UL), words[i]);
+            for (volatile uint32_t d = 0; d < 20; d++) {}
+        }
+    }
+    flash_lock();
+}
+
+bool bootloader_clear_crash_log(void) {
+    uint32_t page_addr = (uint32_t)(uintptr_t)_crash_log_page;
+    if ((page_addr & 0x3FFUL) != 0) {
+        return false;
+    }
+
+    flash_unlock();
+    flash_clear_status_flags();
+    flash_erase_page(page_addr);
+    bool ok = (FLASH_SR & (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) == 0;
+    flash_lock();
+    return ok;
+}
+
 void bootloader_enter_dfu(void) {
+    // Blank all 8x8 TM1629 pad LEDs and 16 round LEDs before rebooting into DFU
+    leds_init();
+
     write_bootloader_magic_page((uint32_t)(uintptr_t)_boot_magic_page);
 
     // Pull PA8 LOW so the host OS detects a clean USB disconnect before DFU re-enumeration
@@ -77,6 +118,36 @@ void bootloader_enter_dfu(void) {
     __asm__ volatile("dsb 0xF" ::: "memory");
     scb_reset_system();
     while (1) {}
+}
+
+void bootloader_fault_dfu(uint32_t fault_msp, uint32_t ipsr) {
+    apc_crash_log_t log;
+    log.magic = APC_CRASH_MAGIC;
+    log.ipsr = ipsr;
+    log.fault_msp = fault_msp;
+    log.cfsr = SCB_CFSR;
+    log.hfsr = SCB_HFSR;
+    // BFARVALID is bit 15 of SCB_CFSR (bit 7 of BFSR)
+    log.far = ((log.cfsr & 0x00008000UL) != 0UL) ? SCB_BFAR : SCB_MMFAR;
+    log.r0 = 0UL;
+    log.r1 = 0UL;
+    log.r2 = 0UL;
+    log.lr = 0UL;
+    log.pc = 0UL;
+    log.uptime_ticks = board_ticks();
+
+    // Extract hardware-pushed exception frame if pre-fault MSP points to valid 6..16 KB SRAM
+    if (fault_msp >= 0x20000000UL && fault_msp <= 0x20003FE0UL && (fault_msp & 3UL) == 0UL) {
+        const volatile uint32_t *frame = (const volatile uint32_t *)fault_msp;
+        log.r0 = frame[0];
+        log.r1 = frame[1];
+        log.r2 = frame[2];
+        log.lr = frame[5];
+        log.pc = frame[6];
+    }
+
+    write_crash_log_page(&log);
+    bootloader_enter_dfu();
 }
 
 void bootloader_check_unlock_packet(const uint8_t pkt[64]) {

@@ -11,5 +11,6 @@ MEMORY
 }
 
 PROVIDE(_boot_magic_page = 0x08007C00);
+PROVIDE(_crash_log_page = 0x08007800);
 
 INCLUDE cortex-m-generic.ld

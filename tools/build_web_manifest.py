@@ -29,6 +29,42 @@ def extract_checksum_hex(bin_bytes: bytes) -> str:
     return f"0x{chk:04X}"
 
 
+def extract_elf_symbols(elf_path: Path | None) -> list[dict[str, Any]]:
+    """Extracts Flash function symbols from an ARM ELF binary via arm-none-eabi-nm."""
+    if elf_path is None or not elf_path.is_file():
+        return []
+    nm_bin = shutil.which("arm-none-eabi-nm")
+    if not nm_bin:
+        return []
+    try:
+        res = subprocess.run(
+            [nm_bin, "-n", "-S", "--defined-only", str(elf_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return []
+
+    symbols: list[dict[str, Any]] = []
+    for line in res.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 4:
+            addr_s, size_s, sym_type, name = parts
+            size = int(size_s, 16)
+        elif len(parts) == 3:
+            addr_s, sym_type, name = parts
+            size = 0
+        else:
+            continue
+        if sym_type.lower() not in ("t", "w"):
+            continue
+        addr = int(addr_s, 16) & ~1
+        if 0x08002000 <= addr < 0x08007800:
+            symbols.append({"addr": addr, "size": size, "name": name})
+    return symbols
+
+
 def stage_firmware_pair(
     version_id: str,
     label: str,
@@ -38,6 +74,7 @@ def stage_firmware_pair(
     *,
     bin_bytes: bytes | None = None,
     syx_bytes: bytes | None = None,
+    symbols: list[dict[str, Any]] | None = None,
     notes: str = "",
 ) -> dict[str, Any]:
     """Validates and writes both .bin and .syx into out_dir/firmware/<version_id>/."""
@@ -66,6 +103,12 @@ def stage_firmware_pair(
     (out_dir / bin_rel).write_bytes(bin_bytes)
     (out_dir / syx_rel).write_bytes(syx_bytes)
 
+    symbols_url: str | None = None
+    if symbols:
+        sym_rel = fw_rel_dir / "symbols.json"
+        (out_dir / sym_rel).write_text(json.dumps(symbols, indent=2) + "\n", encoding="utf-8")
+        symbols_url = sym_rel.as_posix()
+
     return {
         "id": version_id,
         "label": label,
@@ -73,6 +116,7 @@ def stage_firmware_pair(
         "published_at": published_at,
         "syx_url": syx_rel.as_posix(),
         "bin_url": bin_rel.as_posix(),
+        "symbols_url": symbols_url,
         "bin_size": len(bin_bytes),
         "syx_size": len(syx_bytes),
         "checksum": extract_checksum_hex(bin_bytes),
@@ -191,6 +235,7 @@ def build_web_bundle(
     local_bin: Path | None,
     local_syx: Path | None,
     *,
+    local_elf: Path | None = None,
     fetch_releases: bool = False,
     repo: str | None = None,
 ) -> Path:
@@ -211,6 +256,12 @@ def build_web_bundle(
 
     bin_bytes = local_bin.read_bytes() if local_bin and local_bin.is_file() else None
     syx_bytes = local_syx.read_bytes() if local_syx and local_syx.is_file() else None
+    local_symbols = extract_elf_symbols(local_elf)
+
+    if local_symbols:
+        top_sym = out_dir / "firmware" / "symbols.json"
+        top_sym.parent.mkdir(parents=True, exist_ok=True)
+        top_sym.write_text(json.dumps(local_symbols, indent=2) + "\n", encoding="utf-8")
 
     if bin_bytes is not None or syx_bytes is not None:
         exact_tag = git_exact_tag()
@@ -225,6 +276,7 @@ def build_web_bundle(
                 out_dir=out_dir,
                 bin_bytes=bin_bytes,
                 syx_bytes=syx_bytes,
+                symbols=local_symbols,
                 notes=f"Release {exact_tag} ({short_sha})",
             )
             versions.insert(0, entry)
@@ -239,6 +291,7 @@ def build_web_bundle(
             out_dir=out_dir,
             bin_bytes=bin_bytes,
             syx_bytes=syx_bytes,
+            symbols=local_symbols,
             notes=f"Built from commit {short_sha}",
         )
         versions.append(dev_entry)
@@ -297,6 +350,12 @@ def main() -> None:
         help="Path to local .syx build",
     )
     parser.add_argument(
+        "--elf",
+        type=Path,
+        default=Path("build/apc_mini_app.elf"),
+        help="Path to local .elf build for symbol extraction",
+    )
+    parser.add_argument(
         "--fetch-releases",
         action="store_true",
         help="Download and bundle all published GitHub Releases via `gh` CLI",
@@ -314,6 +373,7 @@ def main() -> None:
         out_dir=args.out_dir,
         local_bin=args.bin,
         local_syx=args.syx,
+        local_elf=args.elf,
         fetch_releases=args.fetch_releases,
         repo=args.repo,
     )

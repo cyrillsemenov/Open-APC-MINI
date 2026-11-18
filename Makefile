@@ -66,6 +66,7 @@ CFLAGS := \
 	-mcpu=cortex-m3 \
 	-mthumb \
 	-Os \
+	-g \
 	-std=c11 \
 	-Wall \
 	-Wextra \
@@ -168,8 +169,11 @@ test-validator: $(APP_BIN) $(APP_SYX)
 flash: $(APP_SYX)
 	$(UV) run fw_updater $(APP_SYX)
 
+debug:
+	$(UV) run fw_debug
+
 web-dist: $(APP_BIN) $(APP_SYX) $(wildcard web/*) tools/build_web_manifest.py
-	$(UV) run build_web_manifest --web-src web --out-dir $(WEB_DIST_DIR) --bin $(APP_BIN) --syx $(APP_SYX)
+	$(UV) run build_web_manifest --web-src web --out-dir $(WEB_DIST_DIR) --bin $(APP_BIN) --syx $(APP_SYX) --elf $(APP_ELF)
 
 serve-web: web-dist
 	@echo "Opening WebMIDI Updater at http://localhost:$(WEB_PORT) (localhost is a W3C Secure Context)"

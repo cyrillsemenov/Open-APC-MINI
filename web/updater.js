@@ -344,12 +344,37 @@ const ui = {
   progressPageText: document.getElementById("progressPageText"),
   progressAddrText: document.getElementById("progressAddrText"),
   progressPctText: document.getElementById("progressPctText"),
+  diagStatusLabel: document.getElementById("diagStatusLabel"),
+  btnReadDiag: document.getElementById("btnReadDiag"),
+  btnLivePoll: document.getElementById("btnLivePoll"),
+  btnLedSweep: document.getElementById("btnLedSweep"),
+  btnLedClear: document.getElementById("btnLedClear"),
+  btnTriggerFault: document.getElementById("btnTriggerFault"),
+  telemSilicon: document.getElementById("telemSilicon"),
+  telemReset: document.getElementById("telemReset"),
+  telemUptime: document.getElementById("telemUptime"),
+  telemLoop: document.getElementById("telemLoop"),
+  telemFaders: document.getElementById("telemFaders"),
+  telemShift: document.getElementById("telemShift"),
+  telemLastMidi: document.getElementById("telemLastMidi"),
+  crashBox: document.getElementById("crashBox"),
+  crashTitle: document.getElementById("crashTitle"),
+  crashPre: document.getElementById("crashPre"),
+  btnCopyCrash: document.getElementById("btnCopyCrash"),
+  btnClearCrash: document.getElementById("btnClearCrash"),
+  peekAddrInput: document.getElementById("peekAddrInput"),
+  btnPeekMem: document.getElementById("btnPeekMem"),
+  peekPre: document.getElementById("peekPre"),
   logBox: document.getElementById("logBox"),
   btnClearLog: document.getElementById("btnClearLog"),
 };
 
 let midiAccess = null;
 let activeBundle = null; // { versionLabel, steps, binBytes, syxBytes, checksum }
+let activeSymbols = []; // [{ addr, size, name }, ...]
+let lastCrashMarkdown = "";
+let livePollTimer = null;
+let isDiagBusy = false;
 let manifestData = null;
 let isFlashing = false;
 let pendingRxResolver = null;
@@ -369,6 +394,7 @@ ui.btnClearLog.addEventListener("click", () => {
 
 function updateControlsState() {
   const hasMidiPorts = Boolean(ui.midiOutSelect.value && ui.midiInSelect.value);
+  const canDiag = hasMidiPorts && !isFlashing && !isDiagBusy;
   ui.btnProbeDevice.disabled = !hasMidiPorts || isFlashing;
   ui.btnFlash.disabled = !hasMidiPorts || !activeBundle || isFlashing;
   ui.btnDownloadSyx.disabled = !activeBundle;
@@ -376,6 +402,12 @@ function updateControlsState() {
   ui.versionSelect.disabled = isFlashing;
   ui.midiOutSelect.disabled = !midiAccess || isFlashing;
   ui.midiInSelect.disabled = !midiAccess || isFlashing;
+  if (ui.btnReadDiag) ui.btnReadDiag.disabled = !canDiag;
+  if (ui.btnLivePoll) ui.btnLivePoll.disabled = !hasMidiPorts || isFlashing;
+  if (ui.btnLedSweep) ui.btnLedSweep.disabled = !canDiag;
+  if (ui.btnLedClear) ui.btnLedClear.disabled = !canDiag;
+  if (ui.btnTriggerFault) ui.btnTriggerFault.disabled = !canDiag;
+  if (ui.btnPeekMem) ui.btnPeekMem.disabled = !canDiag;
 }
 
 function setLoadedBundle(versionLabel, bundle) {
@@ -491,6 +523,7 @@ async function onVersionSelectionChanged() {
     const bytes = new Uint8Array(await res.arrayBuffer());
     const bundle = decodeSyxToBundle(bytes);
     setLoadedBundle(entry.id, bundle);
+    await loadSymbolsTable(entry.symbols_url || "firmware/symbols.json");
     log(
       `Loaded ${entry.label}: ${bundle.binBytes.length} B, checksum 0x${bundle.checksum.toString(16).toUpperCase().padStart(4, "0")}.`,
       "ok",
@@ -810,6 +843,7 @@ ui.btnProbeDevice.addEventListener("click", async () => {
         "APC Mini responded in Application mode (Universal Identity Reply received).",
         "ok",
       );
+      await readTelemetryAndCrash({ quiet: true });
     } else {
       log(
         `Received SysEx reply: ${Array.from(rx)
@@ -977,8 +1011,13 @@ async function flashCurrentBundle() {
     );
 
     // Reconnect WebMIDI after the device re-enumerates back into Application mode
-    await sleep(1500);
-    await connectWebMidi({ silent: true });
+    for (let attempt = 0; attempt < 6; attempt++) {
+      await sleep(700);
+      await connectWebMidi({ silent: true });
+      if (ui.midiOutSelect.value && ui.midiInSelect.value) {
+        break;
+      }
+    }
   } catch (err) {
     ui.flashStateLabel.textContent = "Error";
     log(`Flash aborted: ${err.message}`, "err");
@@ -986,10 +1025,459 @@ async function flashCurrentBundle() {
     isFlashing = false;
     updateControlsState();
   }
+  if (ui.midiOutSelect.value && ui.midiInSelect.value) {
+    await readTelemetryAndCrash({ quiet: true });
+  }
 }
 
 ui.btnFlash.addEventListener("click", flashCurrentBundle);
 
+// =========================================================================
+// 4. SWD-Less Diagnostics, Post-Mortem Black-Box & Memory Peek
+// =========================================================================
+const DIAG_SUB_TELEMETRY = 0x01;
+const DIAG_SUB_CRASH_GET = 0x02;
+const DIAG_SUB_CRASH_CLR = 0x03;
+const DIAG_SUB_PEEK_MEM = 0x04;
+const DIAG_SUB_TEST_FAULT = 0x05;
+const APC_CRASH_MAGIC = 0x43525348; // "CRSH"
+
+const IPSR_NAMES = {
+  2: "NMI (Non-Maskable Interrupt / HSE Clock Security)",
+  3: "HardFault",
+  4: "MemManage Fault",
+  5: "BusFault",
+  6: "UsageFault",
+};
+
+const CFSR_BITS = [
+  [0, "IACCVIOL (Instruction access violation)"],
+  [1, "DACCVIOL (Data access violation)"],
+  [3, "MUNSTKERR (MemManage unstacking error)"],
+  [4, "MSTKERR (MemManage stacking error)"],
+  [7, "MMARVALID (MMFAR valid)"],
+  [8, "IBUSERR (Instruction bus error)"],
+  [9, "PRECISERR (Precise data bus error)"],
+  [10, "IMPRECISERR (Imprecise data bus error)"],
+  [11, "UNSTKERR (BusFault unstacking error)"],
+  [12, "STKERR (BusFault stacking error)"],
+  [15, "BFARVALID (BFAR valid)"],
+  [16, "UNDEFINSTR (Undefined instruction)"],
+  [17, "INVSTATE (Invalid EPSR/Thumb state)"],
+  [18, "INVPC (Invalid EXC_RETURN)"],
+  [19, "NOCP (No coprocessor)"],
+  [24, "UNALIGNED (Unaligned memory access)"],
+  [25, "DIVBYZERO (Divide by zero)"],
+];
+
+const HFSR_BITS = [
+  [1, "VECTTBL (Vector table read fault)"],
+  [30, "FORCED (Escalated configurable fault)"],
+  [31, "DEBUGEVT (Debug event)"],
+];
+
+async function loadSymbolsTable(url = "firmware/symbols.json") {
+  try {
+    const res = await fetch(url, { cache: "no-cache" });
+    if (res.ok) {
+      activeSymbols = await res.json();
+    }
+  } catch (_) {
+    // Symbol resolution is optional
+  }
+}
+
+export function resolveSymbolFromTable(addr, symbols = activeSymbols) {
+  if (!addr || !symbols || symbols.length === 0) return "";
+  const clean = (addr >>> 0) & ~1;
+  let best = null;
+  for (const s of symbols) {
+    if (s.addr <= clean) {
+      best = s;
+    } else {
+      break;
+    }
+  }
+  if (!best) return "";
+  const maxSpan = best.size > 0 ? best.size : 512;
+  const diff = clean - best.addr;
+  if (diff > maxSpan) return "";
+  return ` (${best.name}+0x${diff.toString(16)})`;
+}
+
+export function decodeDiagNibbles(rxBytes) {
+  if (
+    rxBytes.length < 7 ||
+    rxBytes[0] !== 0xf0 ||
+    rxBytes[rxBytes.length - 1] !== 0xf7 ||
+    rxBytes[1] !== 0x7d ||
+    rxBytes[2] !== 0x41 ||
+    rxBytes[3] !== 0x50 ||
+    rxBytes[4] !== 0x43
+  ) {
+    throw new Error("Invalid diagnostic SysEx header");
+  }
+  const subcmd = rxBytes[5];
+  const nibLen = rxBytes.length - 7;
+  if (nibLen % 2 !== 0) {
+    throw new Error("Odd nibble count in diagnostic SysEx payload");
+  }
+  const out = new Uint8Array(nibLen / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = ((rxBytes[6 + i * 2] & 0x0f) << 4) | (rxBytes[7 + i * 2] & 0x0f);
+  }
+  return { subcmd, payload: out };
+}
+
+export function encodeAddrNibbles(addr) {
+  const u = addr >>> 0;
+  const bytes = [
+    u & 0xff,
+    (u >>> 8) & 0xff,
+    (u >>> 16) & 0xff,
+    (u >>> 24) & 0xff,
+  ];
+  const nibs = [];
+  for (const b of bytes) {
+    nibs.push((b >>> 4) & 0x0f, b & 0x0f);
+  }
+  return nibs;
+}
+
+function decodeResetCauses(flags) {
+  const list = [];
+  if (flags & 0x04) list.push("IWDGRST (Watchdog Timeout!)");
+  if (flags & 0x08) list.push("WWDGRST");
+  if (flags & 0x10) list.push("SFTRST (SW/DFU)");
+  if (flags & 0x20) list.push("PORRST (Power-On)");
+  if (flags & 0x40) list.push("PINRST (NRST)");
+  if (flags & 0x80) list.push("LPWRRST");
+  return list.length > 0
+    ? list.join(", ")
+    : `0x${flags.toString(16).padStart(2, "0")}`;
+}
+
+function attachPassiveMidiMonitor() {
+  if (!midiAccess || isFlashing || isDiagBusy) return;
+  const inPort = midiAccess.inputs.get(ui.midiInSelect.value);
+  if (!inPort) return;
+  inPort.onmidimessage = (ev) => {
+    const d = ev.data;
+    if (!d || d.length < 3) return;
+    const st = d[0] & 0xf0;
+    if (st === 0x90 || st === 0x80) {
+      const note = d[1];
+      const vel = d[2];
+      const kind = st === 0x90 && vel > 0 ? "NoteOn" : "NoteOff";
+      const coord =
+        note < 64
+          ? `Pad (x=${note % 8}, y=${7 - Math.floor(note / 8)})`
+          : note === 0x62
+            ? "SHIFT"
+            : `Btn 0x${note.toString(16).toUpperCase()}`;
+      ui.telemLastMidi.textContent = `${kind} ${coord} [0x${note.toString(16).toUpperCase()} vel=${vel}]`;
+    } else if (st === 0xb0) {
+      const cc = d[1];
+      const val = d[2];
+      const fIdx =
+        cc >= 0x30 && cc <= 0x38
+          ? `Fader ${cc - 0x30 + 1}`
+          : `CC 0x${cc.toString(16)}`;
+      ui.telemLastMidi.textContent = `${fIdx} = ${val}`;
+    }
+  };
+}
+
+async function sendDiagRequest(subcmd, extraBytes = [], timeoutMs = 1500) {
+  const { outPort, inPort } = getSelectedPorts();
+  await outPort.open().catch(() => {});
+  await inPort.open().catch(() => {});
+  const req = new Uint8Array([
+    0xf0,
+    0x7d,
+    0x41,
+    0x50,
+    0x43,
+    subcmd,
+    ...extraBytes,
+    0xf7,
+  ]);
+  const rx = await sendSysexAndWaitReply(outPort, inPort, req, timeoutMs);
+  attachPassiveMidiMonitor();
+  const decoded = decodeDiagNibbles(rx);
+  if (decoded.subcmd !== subcmd) {
+    throw new Error(
+      `Mismatched diagnostic reply subcmd 0x${decoded.subcmd.toString(16)}`,
+    );
+  }
+  return decoded.payload;
+}
+
+function hex32(val) {
+  return "0x" + (val >>> 0).toString(16).toUpperCase().padStart(8, "0");
+}
+
+function renderCrashLog(payload) {
+  if (!payload || payload.length < 48) return;
+  const dv = new DataView(
+    payload.buffer,
+    payload.byteOffset,
+    payload.byteLength,
+  );
+  const magic = dv.getUint32(0, true);
+  if (magic !== APC_CRASH_MAGIC) {
+    ui.crashBox.classList.remove("hidden");
+    ui.crashBox.classList.add("clean");
+    ui.crashTitle.textContent = "CRASH LOG: CLEAN";
+    ui.crashPre.textContent = "No crash log recorded in Flash Page 30.";
+    lastCrashMarkdown = "";
+    return;
+  }
+
+  const ipsr = dv.getUint32(4, true);
+  const faultMsp = dv.getUint32(8, true);
+  const cfsr = dv.getUint32(12, true);
+  const hfsr = dv.getUint32(16, true);
+  const far = dv.getUint32(20, true);
+  const r0 = dv.getUint32(24, true);
+  const r1 = dv.getUint32(28, true);
+  const r2 = dv.getUint32(32, true);
+  const lr = dv.getUint32(36, true);
+  const pc = dv.getUint32(40, true);
+  const uptimeTicks = dv.getUint32(44, true);
+
+  const excName = IPSR_NAMES[ipsr & 0x1ff] || `Exception #${ipsr & 0x1ff}`;
+  const cfsrFlags = CFSR_BITS.filter(([b]) => (cfsr & (1 << b)) !== 0).map(
+    ([, d]) => d,
+  );
+  const hfsrFlags = HFSR_BITS.filter(([b]) => (hfsr & (1 << b)) !== 0).map(
+    ([, d]) => d,
+  );
+
+  const pcSym = resolveSymbolFromTable(pc);
+  const lrSym = resolveSymbolFromTable(lr);
+
+  const reportText = [
+    `Exception  : ${excName} (IPSR=${hex32(ipsr)})`,
+    `Uptime     : ${(uptimeTicks * 0.5).toFixed(1)} ms (${uptimeTicks} ticks)`,
+    `Fault PC   : ${hex32(pc)}${pcSym}`,
+    `Caller LR  : ${hex32(lr)}${lrSym}`,
+    `Fault MSP  : ${hex32(faultMsp)}`,
+    `SCB->CFSR  : ${hex32(cfsr)} (${cfsrFlags.join(", ") || "None"})`,
+    `SCB->HFSR  : ${hex32(hfsr)} (${hfsrFlags.join(", ") || "None"})`,
+    `Fault Addr : ${hex32(far)} (BFAR/MMFAR)`,
+    `Registers  : R0=${hex32(r0)}  R1=${hex32(r1)}  R2=${hex32(r2)}`,
+  ].join("\n");
+
+  ui.crashBox.classList.remove("hidden", "clean");
+  ui.crashTitle.textContent = `CRASH DETECTED (${excName})`;
+  ui.crashPre.textContent = reportText;
+  lastCrashMarkdown = "```text\n=== CRASH LOG ===\n" + reportText + "\n```";
+  log(`Crash log found: ${excName} at PC=${hex32(pc)}${pcSym}`, "err");
+}
+
+async function readTelemetryAndCrash({ quiet = false } = {}) {
+  if (isFlashing || isDiagBusy) return;
+  isDiagBusy = true;
+  updateControlsState();
+  try {
+    if (activeSymbols.length === 0) {
+      await loadSymbolsTable();
+    }
+    const telem = await sendDiagRequest(DIAG_SUB_TELEMETRY);
+    const dv = new DataView(telem.buffer, telem.byteOffset, telem.byteLength);
+    const rstFlags = dv.getUint8(0);
+    const crashPresent = dv.getUint8(1);
+    const flashKb = dv.getUint16(2, true);
+    const uid0 = dv.getUint32(4, true);
+    const uptimeTicks = dv.getUint32(8, true);
+    const loopCnt = dv.getUint32(12, true);
+    const maxLoopTicks = dv.getUint16(16, true);
+    const faders = Array.from(telem.subarray(18, 27));
+    const shift = dv.getUint8(27);
+
+    const uptimeS = uptimeTicks * 0.0005;
+    const hz = uptimeS > 0 ? Math.round(loopCnt / uptimeS) : 0;
+
+    ui.telemSilicon.textContent = `STM32F102 (${flashKb} KB) UID=${hex32(uid0)}`;
+    ui.telemReset.textContent = decodeResetCauses(rstFlags);
+    ui.telemUptime.textContent = `${uptimeS.toFixed(1)} s (${uptimeTicks.toLocaleString()} t)`;
+    ui.telemLoop.textContent = `~${hz.toLocaleString()} Hz (max ${(maxLoopTicks * 0.5).toFixed(1)} ms)`;
+    ui.telemFaders.textContent = `[${faders.join(", ")}]`;
+    ui.telemShift.textContent = shift ? "PRESSED (1)" : "0";
+    ui.diagStatusLabel.textContent = crashPresent
+      ? "Crash Log Present"
+      : "Healthy (0x08007800 Clean)";
+
+    const crashRaw = await sendDiagRequest(DIAG_SUB_CRASH_GET);
+    renderCrashLog(crashRaw);
+
+    if (!quiet) {
+      log(
+        `Telemetry: ${flashKb} KB Flash, UID=${hex32(uid0)}, loop ~${hz} Hz (max ${(maxLoopTicks * 0.5).toFixed(1)} ms).`,
+        "ok",
+      );
+    }
+  } catch (err) {
+    if (!quiet) {
+      log(`Diagnostics query failed: ${err.message}`, "warn");
+    }
+  } finally {
+    isDiagBusy = false;
+    updateControlsState();
+  }
+}
+
+ui.btnReadDiag.addEventListener("click", () =>
+  readTelemetryAndCrash({ quiet: false }),
+);
+
+ui.btnLivePoll.addEventListener("click", () => {
+  if (livePollTimer) {
+    clearInterval(livePollTimer);
+    livePollTimer = null;
+    ui.btnLivePoll.textContent = "Start Live Poll (1 Hz)";
+    log("Stopped 1 Hz live telemetry polling.");
+  } else {
+    ui.btnLivePoll.textContent = "Stop Live Poll (1 Hz)";
+    readTelemetryAndCrash({ quiet: true });
+    livePollTimer = setInterval(() => {
+      if (!isFlashing && !isDiagBusy) {
+        readTelemetryAndCrash({ quiet: true });
+      }
+    }, 1000);
+    log("Started 1 Hz live telemetry & MIDI input monitor.", "ok");
+  }
+});
+
+ui.btnCopyCrash.addEventListener("click", async () => {
+  const text = lastCrashMarkdown || ui.crashPre.textContent;
+  if (!text) return;
+  await navigator.clipboard.writeText(text);
+  log("Copied crash report to clipboard.", "ok");
+});
+
+ui.btnClearCrash.addEventListener("click", async () => {
+  try {
+    const res = await sendDiagRequest(DIAG_SUB_CRASH_CLR);
+    log(`Cleared crash log (status=${res[0]}).`, "ok");
+    await readTelemetryAndCrash({ quiet: true });
+  } catch (err) {
+    log(`Failed to clear crash log: ${err.message}`, "err");
+  }
+});
+
+ui.btnPeekMem.addEventListener("click", async () => {
+  if (isFlashing || isDiagBusy) return;
+  const rawAddr = parseInt(ui.peekAddrInput.value.trim(), 16);
+  if (Number.isNaN(rawAddr)) {
+    log(`Invalid hex address: '${ui.peekAddrInput.value}'`, "err");
+    return;
+  }
+  isDiagBusy = true;
+  updateControlsState();
+  try {
+    const lines = [];
+    for (let off = 0; off < 64; off += 16) {
+      const cur = (rawAddr + off) >>> 0;
+      const chunk = await sendDiagRequest(
+        DIAG_SUB_PEEK_MEM,
+        encodeAddrNibbles(cur),
+      );
+      const hexCols = Array.from(chunk)
+        .map((b) => b.toString(16).toUpperCase().padStart(2, "0"))
+        .join(" ");
+      const asciiCols = Array.from(chunk)
+        .map((b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : "."))
+        .join("");
+      lines.push(`${hex32(cur)}: ${hexCols}  |${asciiCols}|`);
+    }
+    ui.peekPre.classList.remove("hidden");
+    ui.peekPre.textContent = lines.join("\n");
+    log(`Peeked 64 B at ${hex32(rawAddr)}.`, "ok");
+  } catch (err) {
+    log(`Memory peek at ${hex32(rawAddr)} failed: ${err.message}`, "err");
+  } finally {
+    isDiagBusy = false;
+    updateControlsState();
+  }
+});
+
+for (const btn of document.querySelectorAll(".preset-btn")) {
+  btn.addEventListener("click", () => {
+    ui.peekAddrInput.value = btn.dataset.addr;
+    if (!ui.btnPeekMem.disabled) {
+      ui.btnPeekMem.click();
+    }
+  });
+}
+
+ui.btnLedSweep.addEventListener("click", async () => {
+  try {
+    const { outPort } = getSelectedPorts();
+    await outPort.open().catch(() => {});
+    log("Running 8x8 Pad + Round LED test sweep (Green -> Yellow -> Red)...");
+    for (const vel of [1, 5, 3]) {
+      for (let note = 0; note < 64; note++) {
+        outPort.send([0x90, note, vel]);
+      }
+      for (let note = 64; note <= 71; note++) {
+        outPort.send([0x90, note, 1]);
+      }
+      for (let note = 82; note <= 89; note++) {
+        outPort.send([0x90, note, 1]);
+      }
+      await sleep(250);
+    }
+    log("LED test sweep complete (click 'Clear All LEDs' to blank).", "ok");
+  } catch (err) {
+    log(`LED sweep failed: ${err.message}`, "err");
+  }
+});
+
+ui.btnLedClear.addEventListener("click", async () => {
+  try {
+    const { outPort } = getSelectedPorts();
+    await outPort.open().catch(() => {});
+    for (let note = 0; note < 90; note++) {
+      outPort.send([0x80, note, 0]);
+    }
+    log("Cleared all 64 pad LEDs and 16 round LEDs.", "ok");
+  } catch (err) {
+    log(`Clear LEDs failed: ${err.message}`, "err");
+  }
+});
+
+ui.btnTriggerFault.addEventListener("click", async () => {
+  try {
+    const { outPort } = getSelectedPorts();
+    await outPort.open().catch(() => {});
+    log(
+      "Triggering deliberate UDF #0 fault (0x05 0x5A) — device will log crash to 0x08007800 and reboot into DFU...",
+      "warn",
+    );
+    outPort.send(
+      new Uint8Array([
+        0xf0,
+        0x7d,
+        0x41,
+        0x50,
+        0x43,
+        DIAG_SUB_TEST_FAULT,
+        0x5a,
+        0xf7,
+      ]),
+    );
+    ui.deviceModeLabel.textContent = "Mode: Fault -> DFU Reboot";
+  } catch (err) {
+    log(`Failed to send test fault: ${err.message}`, "err");
+  }
+});
+
 // Initialize on page load: load firmware manifest & auto-connect WebMIDI
 loadManifest();
-connectWebMidi();
+connectWebMidi().then((ok) => {
+  if (ok && ui.midiOutSelect.value && ui.midiInSelect.value) {
+    readTelemetryAndCrash({ quiet: true });
+  }
+});

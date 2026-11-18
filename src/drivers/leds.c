@@ -105,6 +105,9 @@ void leds_init(void) {
     s_pad_blink_phase = false;
     s_mux_slot = 0;
     s_timers_initialized = false;
+
+    GPIO_BSRR(APC_ROUND_ANODE_PORT) = ((uint32_t)APC_ROUND_ANODE_MASK << 16);
+    GPIO_BSRR(APC_ROUND_SINK_PORT) = (uint32_t)APC_ROUND_SINK_MASK;
 }
 
 void leds_set_pad(uint8_t row, uint8_t col, apc_pad_led_mode_t mode, uint32_t now_ticks) {

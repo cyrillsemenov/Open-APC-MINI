@@ -33,6 +33,29 @@ static void tm1629_send_byte(uint8_t data) {
     }
 }
 
+static void tm1629_flush_hw(void) {
+    // Command 1: 0x40 (Data setting: write display, auto-increment address)
+    gpio_clear(APC_TM1629_PORT, APC_TM1629_STB_PIN);
+    tm1629_send_byte(TM1629_CMD_DATA_WRITE_AUTO);
+    gpio_set(APC_TM1629_PORT, APC_TM1629_STB_PIN);
+    for (volatile uint8_t d = 0; d < 16; d++) {}
+
+    // Command 2: 0xC0 (Address 0x00) + 16 display bytes
+    gpio_clear(APC_TM1629_PORT, APC_TM1629_STB_PIN);
+    tm1629_send_byte(TM1629_CMD_ADDR_BASE);
+    for (volatile uint8_t d = 0; d < 16; d++) {}
+    for (uint8_t i = 0; i < 16; i++) {
+        tm1629_send_byte(s_live[i]);
+    }
+    gpio_set(APC_TM1629_PORT, APC_TM1629_STB_PIN);
+    for (volatile uint8_t d = 0; d < 16; d++) {}
+
+    // Command 3: 0x8F (Display ON, max pulse width 14/16)
+    gpio_clear(APC_TM1629_PORT, APC_TM1629_STB_PIN);
+    tm1629_send_byte(TM1629_CMD_DISPLAY_ON_MAX);
+    gpio_set(APC_TM1629_PORT, APC_TM1629_STB_PIN);
+}
+
 void tm1629_init(void) {
     for (uint8_t i = 0; i < 16; i++) {
         s_shadow[i] = 0;
@@ -42,6 +65,9 @@ void tm1629_init(void) {
     s_cooldown_active = false;
     s_cooldown_start = 0;
     s_cooldown_ticks = 0;
+
+    // Actively clear the TM1629's internal 16-byte display RAM across soft reboots
+    tm1629_flush_hw();
 }
 
 void tm1629_set_pad_rgb(uint8_t row, uint8_t col, bool green, bool red) {
@@ -109,24 +135,5 @@ void tm1629_task(uint32_t now_ticks) {
         return;
     }
 
-    // Command 1: 0x40 (Data setting: write display, auto-increment address)
-    gpio_clear(APC_TM1629_PORT, APC_TM1629_STB_PIN);
-    tm1629_send_byte(TM1629_CMD_DATA_WRITE_AUTO);
-    gpio_set(APC_TM1629_PORT, APC_TM1629_STB_PIN);
-    for (volatile uint8_t d = 0; d < 16; d++) {}
-
-    // Command 2: 0xC0 (Address 0x00) + 16 display bytes
-    gpio_clear(APC_TM1629_PORT, APC_TM1629_STB_PIN);
-    tm1629_send_byte(TM1629_CMD_ADDR_BASE);
-    for (volatile uint8_t d = 0; d < 16; d++) {}
-    for (uint8_t i = 0; i < 16; i++) {
-        tm1629_send_byte(s_live[i]);
-    }
-    gpio_set(APC_TM1629_PORT, APC_TM1629_STB_PIN);
-    for (volatile uint8_t d = 0; d < 16; d++) {}
-
-    // Command 3: 0x8F (Display ON, max pulse width 14/16)
-    gpio_clear(APC_TM1629_PORT, APC_TM1629_STB_PIN);
-    tm1629_send_byte(TM1629_CMD_DISPLAY_ON_MAX);
-    gpio_set(APC_TM1629_PORT, APC_TM1629_STB_PIN);
+    tm1629_flush_hw();
 }

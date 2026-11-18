@@ -4,7 +4,7 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>APC Mini — WebMIDI Firmware Updater</title>
-        <link href="style.css" rel="stylesheet" />
+        <link href="style.css?v=20261118b" rel="stylesheet" />
     </head>
     <body>
         <div class="container">
@@ -164,7 +164,152 @@
                 </div>
             </section>
 
-            <!-- 4. Console Log -->
+            <!-- 4. Live Diagnostics, Post-Mortem Crash Log & Memory Peek -->
+            <section class="card">
+                <div class="card-title">
+                    <span
+                        >4. Device Diagnostics &amp; Post-Mortem Black-Box</span
+                    >
+                    <span
+                        id="diagStatusLabel"
+                        style="font-family: var(--mono); font-size: 0.78rem"
+                        >SWD-Less SysEx Inspector</span
+                    >
+                </div>
+
+                <div class="btn-row" style="margin-top: 0">
+                    <button id="btnReadDiag" type="button" disabled>
+                        Read Telemetry &amp; Crash Log
+                    </button>
+                    <button id="btnLivePoll" type="button" disabled>
+                        Start Live Poll (1 Hz)
+                    </button>
+                    <button id="btnLedSweep" type="button" disabled>
+                        LED Test Sweep
+                    </button>
+                    <button id="btnLedClear" type="button" disabled>
+                        Clear All LEDs
+                    </button>
+                    <button
+                        id="btnTriggerFault"
+                        type="button"
+                        style="display: none"
+                        disabled
+                    >
+                        Test Fault (UDF #0)
+                    </button>
+                </div>
+
+                <table class="meta-table" id="telemGrid">
+                    <thead>
+                        <tr>
+                            <th>MCU Silicon &amp; Flash</th>
+                            <th>Last Reset Cause (RCC_CSR)</th>
+                            <th>Uptime</th>
+                            <th>Main Loop &amp; Max Latency</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong id="telemSilicon">—</strong></td>
+                            <td><strong id="telemReset">—</strong></td>
+                            <td><strong id="telemUptime">—</strong></td>
+                            <td><strong id="telemLoop">—</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <table
+                    class="meta-table"
+                    style="margin-top: 6px; display: none"
+                >
+                    <thead>
+                        <tr>
+                            <th>Faders 1..8 + Master (ADC1+DMA1)</th>
+                            <th>Shift</th>
+                            <th>Last MIDI Input Event</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong id="telemFaders">—</strong></td>
+                            <td><strong id="telemShift">—</strong></td>
+                            <td><strong id="telemLastMidi">—</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div id="crashBox" class="crash-box hidden">
+                    <div class="crash-header">
+                        <strong id="crashTitle">CRASH LOG</strong>
+                        <div class="btn-row" style="margin-top: 0">
+                            <button
+                                id="btnCopyCrash"
+                                type="button"
+                                style="padding: 2px 8px; font-size: 0.78rem"
+                            >
+                                Copy Markdown Report
+                            </button>
+                            <button
+                                id="btnClearCrash"
+                                type="button"
+                                style="padding: 2px 8px; font-size: 0.78rem"
+                            >
+                                Clear Crash Log
+                            </button>
+                        </div>
+                    </div>
+                    <pre class="crash-pre" id="crashPre"></pre>
+                </div>
+
+                <div class="peek-bar">
+                    <input
+                        id="peekAddrInput"
+                        type="text"
+                        value="0x08007800"
+                        size="12"
+                        style="
+                            font-family: var(--mono);
+                            font-size: 0.85rem;
+                            padding: 2px 6px;
+                        "
+                    />
+                    <button id="btnPeekMem" type="button" disabled>
+                        Peek 64 B
+                    </button>
+                    <button
+                        class="preset-btn"
+                        type="button"
+                        data-addr="0x08007800"
+                    >
+                        Crash Log
+                    </button>
+                    <button
+                        class="preset-btn"
+                        type="button"
+                        data-addr="0x1FFFF7E0"
+                    >
+                        Silicon UID
+                    </button>
+                    <button
+                        class="preset-btn"
+                        type="button"
+                        data-addr="0x20000000"
+                    >
+                        SRAM Base
+                    </button>
+                    <button
+                        class="preset-btn"
+                        type="button"
+                        data-addr="0x40021000"
+                    >
+                        RCC Regs
+                    </button>
+                </div>
+                <pre class="peek-pre hidden" id="peekPre"></pre>
+            </section>
+
+            <!-- 5. Console Log -->
             <section class="card">
                 <div class="card-title">
                     <span>Protocol Log</span>
@@ -180,6 +325,6 @@
             </section>
         </div>
 
-        <script type="module" src="updater.js"></script>
+        <script type="module" src="updater.js?v=20261118b"></script>
     </body>
 </html>

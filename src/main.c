@@ -24,5 +24,6 @@ int main(void) {
         apc_mode_poll_rx(now);
         leds_task(now);
         usb_midi_flush_tx();
+        board_record_loop_turn(board_ticks() - now);
     }
 }

@@ -7,6 +7,9 @@
 #include "board.h"
 
 static volatile uint32_t s_systick_ticks = 0;
+static uint8_t s_boot_reset_flags = 0;
+static uint32_t s_loop_count = 0;
+static uint16_t s_max_loop_ticks = 0;
 
 // 8 MHz HSE * 6 = 48 MHz SYSCLK, 48 MHz USBCLK (/1), 24 MHz APB1 (/2), 8 MHz ADCCLK (/6)
 static const struct rcc_clock_scale k_clock_hse8_48mhz = {
@@ -91,6 +94,9 @@ static void systick_init(void) {
 }
 
 void board_init(void) {
+    s_boot_reset_flags = (uint8_t)((RCC_CSR >> 24U) & 0xFFU);
+    RCC_CSR |= RCC_CSR_RMVF;
+
     clock_init();
     relocate_vtor();
     gpio_init();
@@ -123,4 +129,23 @@ void board_usb_dp_pullup(bool enable) {
     } else {
         gpio_clear(APC_USB_DP_PU_PORT, APC_USB_DP_PU_PIN);
     }
+}
+
+uint8_t board_reset_flags(void) {
+    return s_boot_reset_flags;
+}
+
+void board_record_loop_turn(uint32_t elapsed_ticks) {
+    s_loop_count++;
+    if (elapsed_ticks > (uint32_t)s_max_loop_ticks) {
+        s_max_loop_ticks = (elapsed_ticks > 0xFFFFUL) ? 0xFFFFU : (uint16_t)elapsed_ticks;
+    }
+}
+
+uint32_t board_loop_count(void) {
+    return s_loop_count;
+}
+
+uint16_t board_max_loop_ticks(void) {
+    return s_max_loop_ticks;
 }

@@ -1,6 +1,6 @@
 [project]
 name = "apc"
-version = "0.2.0"
+version = "0.2.1"
 description = "Open APC Mini Firmware, Validator & WebMIDI Updater"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -14,6 +14,7 @@ fw_updater = "tools.fw_updater:main"
 stamp_fw = "tools.stamp_fw:main"
 validate_fw = "tools.validate_fw:main"
 test_validator = "tools.test_validator:main"
+fw_debug = "tools.fw_debug:main"
 
 [build-system]
 requires = ["hatchling"]
