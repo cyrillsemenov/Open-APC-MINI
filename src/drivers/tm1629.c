@@ -22,7 +22,7 @@ static uint32_t s_cooldown_ticks = 0;
 static void tm1629_send_byte(uint8_t data) {
     for (uint8_t bit = 0; bit < 8; bit++) {
         gpio_clear(APC_TM1629_PORT, APC_TM1629_CLK_PIN);
-        for (volatile uint8_t d = 0; d < 10; d++) {}
+        for (volatile uint8_t d = 0; d < 3; d++) {}
 
         if ((data & 0x01U) != 0) {
             gpio_set(APC_TM1629_PORT, APC_TM1629_DIO_PIN);
@@ -32,7 +32,7 @@ static void tm1629_send_byte(uint8_t data) {
         data >>= 1;
 
         gpio_set(APC_TM1629_PORT, APC_TM1629_CLK_PIN);
-        for (volatile uint8_t d = 0; d < 10; d++) {}
+        for (volatile uint8_t d = 0; d < 3; d++) {}
     }
 }
 
@@ -41,17 +41,17 @@ static void tm1629_flush_hw(void) {
     gpio_clear(APC_TM1629_PORT, APC_TM1629_STB_PIN);
     tm1629_send_byte(TM1629_CMD_DATA_WRITE_AUTO);
     gpio_set(APC_TM1629_PORT, APC_TM1629_STB_PIN);
-    for (volatile uint8_t d = 0; d < 16; d++) {}
+    for (volatile uint8_t d = 0; d < 6; d++) {}
 
     // Command 2: 0xC0 (Address 0x00) + 16 display bytes
     gpio_clear(APC_TM1629_PORT, APC_TM1629_STB_PIN);
     tm1629_send_byte(TM1629_CMD_ADDR_BASE);
-    for (volatile uint8_t d = 0; d < 16; d++) {}
+    for (volatile uint8_t d = 0; d < 6; d++) {}
     for (uint8_t i = 0; i < 16; i++) {
         tm1629_send_byte(s_live[i]);
     }
     gpio_set(APC_TM1629_PORT, APC_TM1629_STB_PIN);
-    for (volatile uint8_t d = 0; d < 16; d++) {}
+    for (volatile uint8_t d = 0; d < 6; d++) {}
 
     // Command 3: 0x88..0x8F (Display ON + 3-bit pulse width)
     gpio_clear(APC_TM1629_PORT, APC_TM1629_STB_PIN);

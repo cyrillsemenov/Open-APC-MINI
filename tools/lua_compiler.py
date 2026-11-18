@@ -99,6 +99,9 @@ BUILTINS: dict[str, tuple[int, int]] = {
     "math.max": (0x0D, 2),
     "host_led": (0x0E, 2),
     "life_step": (0x0F, 0),
+    "yield": (0x10, 0),
+    "sleep_ms": (0x11, 1),
+    "key_pulse": (0x12, 3),
 }
 
 # SysEx Subcommands

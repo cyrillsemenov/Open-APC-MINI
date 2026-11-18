@@ -15,10 +15,30 @@
 #include "usb_midi.h"
 
 #define LUA_MAX_STEPS   32768U
+#define LUA_SLICE_STEPS 128U
 #define LUA_STACK_SIZE  64U
 #define LUA_NUM_LOCALS  32U
 #define LUA_NUM_GLOBALS 64U
 #define LUA_MEM_SIZE    256U
+#define LUA_MAX_GATES   8U
+
+typedef struct {
+    bool active;
+    uint16_t pc;
+    uint8_t sp;
+    uint16_t total_steps;
+    uint32_t wake_tick;
+    int32_t ret_val;
+    int32_t stack[LUA_STACK_SIZE];
+    int32_t locals[LUA_NUM_LOCALS];
+} lua_coro_t;
+
+typedef struct {
+    bool active;
+    uint8_t x;
+    uint8_t y;
+    uint32_t off_tick;
+} lua_gate_t;
 
 // Built-in default ROM script (compiled from scripts/bouncy_echo.lua)
 static const uint8_t k_rom_script[385] = {
@@ -66,6 +86,8 @@ static uint16_t s_upload_received = 0U;
 static int16_t s_globals[LUA_NUM_GLOBALS];
 static int16_t s_mem[LUA_MEM_SIZE];
 static uint8_t s_fader_vals[APC_FADER_COUNT];
+static lua_coro_t s_tick_coro;
+static lua_gate_t s_gates[LUA_MAX_GATES];
 
 static uint32_t s_last_tick = 0U;
 static uint32_t s_tick_interval = 110U; // 55 ms in 0.5 ms SysTick units
@@ -108,7 +130,75 @@ static void clear_overlay_leds(uint32_t now_ticks) {
     apc_mode_clear_overlay(now_ticks);
 }
 
-static int32_t call_builtin(uint8_t fn_id, uint8_t argc, const int32_t *args, uint32_t now_ticks) {
+static void emit_grid_key_event(uint8_t x, uint8_t y, bool pressed) {
+    if (x >= 8U || y >= 8U) {
+        return;
+    }
+    if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
+        monome_mode_send_key(x, y, pressed);
+    } else {
+        uint8_t note = (uint8_t)((7U - y) * 8U + x);
+        uint8_t cin = pressed ? USB_MIDI_CIN_NOTE_ON : USB_MIDI_CIN_NOTE_OFF;
+        uint8_t st = pressed ? MIDI_STATUS_NOTE_ON : MIDI_STATUS_NOTE_OFF;
+        usb_midi_send_event(cin, st, note, pressed ? APC_DEFAULT_VELOCITY : 0U);
+    }
+}
+
+static void flush_all_gates(void) {
+    for (uint8_t i = 0U; i < LUA_MAX_GATES; i++) {
+        if (s_gates[i].active) {
+            s_gates[i].active = false;
+            emit_grid_key_event(s_gates[i].x, s_gates[i].y, false);
+        }
+    }
+}
+
+static void service_expired_gates(uint32_t now_ticks) {
+    for (uint8_t i = 0U; i < LUA_MAX_GATES; i++) {
+        if (s_gates[i].active && (int32_t)(now_ticks - s_gates[i].off_tick) >= 0) {
+            s_gates[i].active = false;
+            emit_grid_key_event(s_gates[i].x, s_gates[i].y, false);
+        }
+    }
+}
+
+static void schedule_key_pulse(uint8_t x, uint8_t y, int32_t ms, uint32_t now_ticks) {
+    if (x >= 8U || y >= 8U) {
+        return;
+    }
+    emit_grid_key_event(x, y, true);
+    if (ms <= 0) {
+        emit_grid_key_event(x, y, false);
+        return;
+    }
+    if (ms > 4000) {
+        ms = 4000;
+    }
+    uint32_t off_tick = now_ticks + ((uint32_t)ms * 2U);
+
+    // Reuse existing gate slot for the same pad or first free slot
+    uint8_t victim = 0U;
+    for (uint8_t i = 0U; i < LUA_MAX_GATES; i++) {
+        if (s_gates[i].active && s_gates[i].x == x && s_gates[i].y == y) {
+            s_gates[i].off_tick = off_tick;
+            return;
+        }
+        if (!s_gates[i].active) {
+            victim = i;
+            break;
+        }
+    }
+    if (s_gates[victim].active) {
+        emit_grid_key_event(s_gates[victim].x, s_gates[victim].y, false);
+    }
+    s_gates[victim].active = true;
+    s_gates[victim].x = x;
+    s_gates[victim].y = y;
+    s_gates[victim].off_tick = off_tick;
+}
+
+static int32_t call_builtin(lua_coro_t *c, uint8_t fn_id, uint8_t argc, const int32_t *args,
+                            uint32_t now_ticks, bool *out_yielded) {
     (void)argc;
     switch (fn_id) {
     case LUA_FN_LED: {
@@ -146,14 +236,7 @@ static int32_t call_builtin(uint8_t fn_id, uint8_t argc, const int32_t *args, ui
         int32_t y = args[1];
         bool pressed = (args[2] != 0);
         if (x >= 0 && x < 8 && y >= 0 && y < 8) {
-            if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
-                monome_mode_send_key((uint8_t)x, (uint8_t)y, pressed);
-            } else {
-                uint8_t note = (uint8_t)((7U - (uint8_t)y) * 8U + (uint8_t)x);
-                uint8_t cin = pressed ? USB_MIDI_CIN_NOTE_ON : USB_MIDI_CIN_NOTE_OFF;
-                uint8_t st = pressed ? MIDI_STATUS_NOTE_ON : MIDI_STATUS_NOTE_OFF;
-                usb_midi_send_event(cin, st, note, pressed ? APC_DEFAULT_VELOCITY : 0U);
-            }
+            emit_grid_key_event((uint8_t)x, (uint8_t)y, pressed);
         }
         return 0;
     }
@@ -292,49 +375,101 @@ static int32_t call_builtin(uint8_t fn_id, uint8_t argc, const int32_t *args, ui
         return alive_cnt;
     }
 
+    case LUA_FN_YIELD:
+        if (out_yielded != NULL) {
+            *out_yielded = true;
+        }
+        return 0;
+
+    case LUA_FN_SLEEP_MS: {
+        int32_t ms = args[0];
+        if (ms > 0) {
+            if (ms > 4000) {
+                ms = 4000;
+            }
+            c->wake_tick = now_ticks + ((uint32_t)ms * 2U);
+            if (out_yielded != NULL) {
+                *out_yielded = true;
+            }
+        }
+        return 0;
+    }
+
+    case LUA_FN_KEY_PULSE: {
+        int32_t x = args[0];
+        int32_t y = args[1];
+        int32_t ms = args[2];
+        if (x >= 0 && x < 8 && y >= 0 && y < 8) {
+            schedule_key_pulse((uint8_t)x, (uint8_t)y, ms, now_ticks);
+        }
+        return 0;
+    }
+
     default:
         return 0;
     }
 }
 
-static int32_t run_entry(uint8_t header_entry_off, int32_t a0, int32_t a1, int32_t a2,
-                         uint32_t now_ticks) {
+static bool init_coro(lua_coro_t *c, uint8_t header_entry_off, int32_t a0, int32_t a1, int32_t a2,
+                      uint32_t now_ticks) {
     if (s_active_image == NULL) {
-        return 0;
+        c->active = false;
+        return false;
     }
     uint16_t code_len = read_u16(&s_active_image[4]);
     uint16_t pc = read_u16(&s_active_image[header_entry_off]);
     if (pc == LUA_ENTRY_NONE || pc >= code_len) {
-        return 0;
+        c->active = false;
+        return false;
     }
-
-    const uint8_t *code = &s_active_image[LUA_HEADER_SIZE];
-    int32_t stack[LUA_STACK_SIZE];
-    int32_t locals[LUA_NUM_LOCALS];
+    c->active = true;
+    c->pc = pc;
+    c->sp = 0U;
+    c->total_steps = 0U;
+    c->wake_tick = now_ticks;
+    c->ret_val = 0;
     for (uint8_t i = 0; i < LUA_NUM_LOCALS; i++) {
-        locals[i] = 0;
+        c->locals[i] = 0;
     }
-    locals[0] = a0;
-    locals[1] = a1;
-    locals[2] = a2;
+    c->locals[0] = a0;
+    c->locals[1] = a1;
+    c->locals[2] = a2;
+    return true;
+}
 
-    uint8_t sp = 0U;
-    uint16_t steps = 0U;
+static void step_coro(lua_coro_t *c, uint16_t slice_budget, uint32_t now_ticks) {
+    if (!c->active || s_active_image == NULL) {
+        return;
+    }
+    if ((int32_t)(now_ticks - c->wake_tick) < 0) {
+        return;
+    }
 
-    while (pc < code_len && steps < LUA_MAX_STEPS) {
-        steps++;
+    uint16_t code_len = read_u16(&s_active_image[4]);
+    const uint8_t *code = &s_active_image[LUA_HEADER_SIZE];
+    uint16_t pc = c->pc;
+    uint8_t sp = c->sp;
+    uint16_t slice_steps = 0U;
+
+    while (pc < code_len && slice_steps < slice_budget && c->total_steps < LUA_MAX_STEPS) {
+        slice_steps++;
+        c->total_steps++;
         uint8_t op = code[pc++];
 
         switch (op) {
         case LUA_OP_HALT:
-            return 0;
+            c->active = false;
+            c->ret_val = 0;
+            return;
 
         case LUA_OP_RET:
-            return (sp > 0U) ? stack[--sp] : 0;
+            c->active = false;
+            c->ret_val = (sp > 0U) ? c->stack[--sp] : 0;
+            return;
 
         case LUA_OP_PUSH_I8:
             if (pc < code_len && sp < LUA_STACK_SIZE) {
-                stack[sp++] = (int32_t)(int8_t)code[pc++];
+                c->stack[sp++] = (int32_t)(int8_t)code[pc++];
             }
             break;
 
@@ -342,49 +477,49 @@ static int32_t run_entry(uint8_t header_entry_off, int32_t a0, int32_t a1, int32
             if ((pc + 1U) < code_len && sp < LUA_STACK_SIZE) {
                 int16_t v = (int16_t)read_u16(&code[pc]);
                 pc = (uint16_t)(pc + 2U);
-                stack[sp++] = (int32_t)v;
+                c->stack[sp++] = (int32_t)v;
             }
             break;
 
         case LUA_OP_GET_LOCAL:
             if (pc < code_len && sp < LUA_STACK_SIZE) {
                 uint8_t idx = (uint8_t)(code[pc++] & (LUA_NUM_LOCALS - 1U));
-                stack[sp++] = locals[idx];
+                c->stack[sp++] = c->locals[idx];
             }
             break;
 
         case LUA_OP_SET_LOCAL:
             if (pc < code_len && sp > 0U) {
                 uint8_t idx = (uint8_t)(code[pc++] & (LUA_NUM_LOCALS - 1U));
-                locals[idx] = stack[--sp];
+                c->locals[idx] = c->stack[--sp];
             }
             break;
 
         case LUA_OP_GET_GLOBAL:
             if (pc < code_len && sp < LUA_STACK_SIZE) {
                 uint8_t idx = (uint8_t)(code[pc++] & (LUA_NUM_GLOBALS - 1U));
-                stack[sp++] = (int32_t)s_globals[idx];
+                c->stack[sp++] = (int32_t)s_globals[idx];
             }
             break;
 
         case LUA_OP_SET_GLOBAL:
             if (pc < code_len && sp > 0U) {
                 uint8_t idx = (uint8_t)(code[pc++] & (LUA_NUM_GLOBALS - 1U));
-                s_globals[idx] = (int16_t)stack[--sp];
+                s_globals[idx] = (int16_t)c->stack[--sp];
             }
             break;
 
         case LUA_OP_GET_MEM:
             if (sp > 0U) {
-                uint8_t idx = (uint8_t)(stack[sp - 1U] & (LUA_MEM_SIZE - 1U));
-                stack[sp - 1U] = (int32_t)s_mem[idx];
+                uint8_t idx = (uint8_t)(c->stack[sp - 1U] & (LUA_MEM_SIZE - 1U));
+                c->stack[sp - 1U] = (int32_t)s_mem[idx];
             }
             break;
 
         case LUA_OP_SET_MEM:
             if (sp >= 2U) {
-                int32_t val = stack[--sp];
-                uint8_t idx = (uint8_t)(stack[--sp] & (LUA_MEM_SIZE - 1U));
+                int32_t val = c->stack[--sp];
+                uint8_t idx = (uint8_t)(c->stack[--sp] & (LUA_MEM_SIZE - 1U));
                 s_mem[idx] = (int16_t)val;
             }
             break;
@@ -397,13 +532,13 @@ static int32_t run_entry(uint8_t header_entry_off, int32_t a0, int32_t a1, int32
 
         case LUA_OP_NEG:
             if (sp > 0U) {
-                stack[sp - 1U] = -stack[sp - 1U];
+                c->stack[sp - 1U] = -c->stack[sp - 1U];
             }
             break;
 
         case LUA_OP_NOT:
             if (sp > 0U) {
-                stack[sp - 1U] = (stack[sp - 1U] == 0) ? 1 : 0;
+                c->stack[sp - 1U] = (c->stack[sp - 1U] == 0) ? 1 : 0;
             }
             break;
 
@@ -424,8 +559,8 @@ static int32_t run_entry(uint8_t header_entry_off, int32_t a0, int32_t a1, int32
         case LUA_OP_GT:
         case LUA_OP_GE:
             if (sp >= 2U) {
-                int32_t b = stack[--sp];
-                int32_t a = stack[sp - 1U];
+                int32_t b = c->stack[--sp];
+                int32_t a = c->stack[sp - 1U];
                 int32_t r = 0;
                 switch (op) {
                 case LUA_OP_ADD:
@@ -484,7 +619,7 @@ static int32_t run_entry(uint8_t header_entry_off, int32_t a0, int32_t a1, int32
                 default:
                     break;
                 }
-                stack[sp - 1U] = r;
+                c->stack[sp - 1U] = r;
             }
             break;
 
@@ -498,7 +633,7 @@ static int32_t run_entry(uint8_t header_entry_off, int32_t a0, int32_t a1, int32
             if ((pc + 1U) < code_len && sp > 0U) {
                 uint16_t target = read_u16(&code[pc]);
                 pc = (uint16_t)(pc + 2U);
-                if (stack[--sp] == 0) {
+                if (c->stack[--sp] == 0) {
                     pc = target;
                 }
             }
@@ -508,7 +643,7 @@ static int32_t run_entry(uint8_t header_entry_off, int32_t a0, int32_t a1, int32
             if ((pc + 1U) < code_len && sp > 0U) {
                 uint16_t target = read_u16(&code[pc]);
                 pc = (uint16_t)(pc + 2U);
-                if (stack[--sp] != 0) {
+                if (c->stack[--sp] != 0) {
                     pc = target;
                 }
             }
@@ -520,27 +655,51 @@ static int32_t run_entry(uint8_t header_entry_off, int32_t a0, int32_t a1, int32
                 uint8_t argc = code[pc++];
                 int32_t args[4] = {0, 0, 0, 0};
                 for (int8_t i = (int8_t)argc - 1; i >= 0; i--) {
-                    int32_t v = (sp > 0U) ? stack[--sp] : 0;
+                    int32_t v = (sp > 0U) ? c->stack[--sp] : 0;
                     if (i < 4) {
                         args[i] = v;
                     }
                 }
-                int32_t res = call_builtin(fn_id, argc, args, now_ticks);
+                bool yielded = false;
+                int32_t res = call_builtin(c, fn_id, argc, args, now_ticks, &yielded);
                 if (sp < LUA_STACK_SIZE) {
-                    stack[sp++] = res;
+                    c->stack[sp++] = res;
+                }
+                if (yielded) {
+                    c->pc = pc;
+                    c->sp = sp;
+                    return;
                 }
             }
             break;
 
         default:
-            return 0;
+            c->active = false;
+            return;
         }
     }
 
-    return 0;
+    if (pc >= code_len || c->total_steps >= LUA_MAX_STEPS) {
+        c->active = false;
+    } else {
+        c->pc = pc;
+        c->sp = sp;
+    }
+}
+
+static int32_t run_sync_entry(uint8_t header_entry_off, int32_t a0, int32_t a1, int32_t a2,
+                              uint32_t now_ticks) {
+    lua_coro_t sync_coro;
+    if (!init_coro(&sync_coro, header_entry_off, a0, a1, a2, now_ticks)) {
+        return 0;
+    }
+    step_coro(&sync_coro, 2048U, now_ticks);
+    return sync_coro.ret_val;
 }
 
 static void reset_vm_state(uint32_t now_ticks) {
+    s_tick_coro.active = false;
+    flush_all_gates();
     for (uint8_t i = 0; i < LUA_NUM_GLOBALS; i++) {
         s_globals[i] = 0;
     }
@@ -554,7 +713,7 @@ static void reset_vm_state(uint32_t now_ticks) {
     s_tick_interval = 110U;
     s_step_counter = 0;
     s_last_tick = now_ticks;
-    run_entry(6U, 0, 0, 0, now_ticks);
+    run_sync_entry(6U, 0, 0, 0, now_ticks);
 }
 
 static void send_lua_ack(uint8_t status) {
@@ -571,6 +730,9 @@ static void send_lua_ack(uint8_t status) {
 
 void lua_vm_init(uint32_t now_ticks) {
     s_enabled = false;
+    for (uint8_t i = 0U; i < LUA_MAX_GATES; i++) {
+        s_gates[i].active = false;
+    }
     if (is_valid_lua_image(_lua_flash_page, LUA_MAX_IMAGE_LEN)) {
         s_active_image = _lua_flash_page;
     } else {
@@ -588,6 +750,8 @@ void lua_vm_set_enabled(bool enabled, uint32_t now_ticks) {
         return;
     }
     s_enabled = enabled;
+    s_tick_coro.active = false;
+    flush_all_gates();
     clear_overlay_leds(now_ticks);
     if (s_enabled) {
         reset_vm_state(now_ticks);
@@ -603,9 +767,19 @@ void lua_vm_task(uint32_t now_ticks) {
     if (!s_enabled) {
         return;
     }
-    if ((uint32_t)(now_ticks - s_last_tick) >= s_tick_interval) {
+
+    // 1. Drain expired async note/key gates
+    service_expired_gates(now_ticks);
+
+    // 2. Start a new on_tick coroutine frame when the tempo interval elapses
+    if (!s_tick_coro.active && (uint32_t)(now_ticks - s_last_tick) >= s_tick_interval) {
         s_last_tick = now_ticks;
-        run_entry(8U, s_step_counter++, 0, 0, now_ticks);
+        init_coro(&s_tick_coro, 8U, s_step_counter++, 0, 0, now_ticks);
+    }
+
+    // 3. Execute at most LUA_SLICE_STEPS (128 ops, ~70 us) per main-loop turn
+    if (s_tick_coro.active) {
+        step_coro(&s_tick_coro, LUA_SLICE_STEPS, now_ticks);
     }
 }
 
@@ -616,7 +790,7 @@ bool lua_vm_on_button(apc_btn_group_t group, uint8_t index, bool pressed, uint32
     int32_t x = (int32_t)(index & 7U);
     int32_t y = (int32_t)(7U - (index >> 3U));
     int32_t z = pressed ? 1 : 0;
-    int32_t consumed = run_entry(10U, x, y, z, now_ticks);
+    int32_t consumed = run_sync_entry(10U, x, y, z, now_ticks);
     return (consumed != 0);
 }
 
@@ -626,7 +800,7 @@ void lua_vm_on_fader(uint8_t fader_idx, uint8_t value, uint32_t now_ticks) {
     }
     s_fader_vals[fader_idx] = value;
     if (s_enabled) {
-        run_entry(12U, (int32_t)fader_idx, (int32_t)value, 0, now_ticks);
+        run_sync_entry(12U, (int32_t)fader_idx, (int32_t)value, 0, now_ticks);
     }
 }
 

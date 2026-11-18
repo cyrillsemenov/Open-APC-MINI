@@ -78,6 +78,9 @@
 #define LUA_FN_MAX          0x0DU // max(a, b)
 #define LUA_FN_HOST_LED     0x0EU // host_led(x, y) -> 0..16
 #define LUA_FN_LIFE_STEP    0x0FU // life_step() -> alive_count (computes mem[0..63] -> mem[64..127])
+#define LUA_FN_YIELD        0x10U // yield() -> suspends current coroutine slice
+#define LUA_FN_SLEEP_MS     0x11U // sleep_ms(ms) -> suspends coroutine for ms milliseconds
+#define LUA_FN_KEY_PULSE    0x12U // key_pulse(x, y, ms) -> fires key-down + async key-up after ms
 
 /*---------------------------------------------------------------------------
  * SysEx Upload Subcommands: F0 7D 'L' 'U' 'A' <cmd> ... F7
