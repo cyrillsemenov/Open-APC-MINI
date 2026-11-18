@@ -1,7 +1,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include "apc_config.h"
+#include "apc_mode.h"
 #include "apc_protocol.h"
+#include "bootloader.h"
+#include "buttons.h"
 #include "leds.h"
 #include "lua_vm.h"
 #include "monome_mode.h"
@@ -42,7 +45,8 @@
 #define MEXT_EV_KEY_UP         0x20U
 #define MEXT_EV_KEY_DOWN       0x21U
 
-#define MEXT_CMD_TILT_SET      0x80U
+#define MEXT_CMD_TILT_DISABLE  0x80U
+#define MEXT_CMD_TILT_ENABLE   0x81U
 #define MEXT_EV_TILT           0x81U
 
 #define MONOME_LVL_1BIT_ON     16U
@@ -113,7 +117,7 @@ apc_pad_led_mode_t monome_map_level_to_pad_mode(uint8_t level, uint8_t palette) 
     }
 }
 
-static void refresh_pad_led(uint8_t x, uint8_t y, uint32_t now_ticks) {
+void monome_mode_refresh_pad(uint8_t x, uint8_t y, uint32_t now_ticks) {
     if (x >= 8U || y >= 8U) {
         return;
     }
@@ -121,29 +125,32 @@ static void refresh_pad_led(uint8_t x, uint8_t y, uint32_t now_ticks) {
     if (lvl == 0U) {
         lvl = s_grid_level[y][x];
     }
-    apc_pad_led_mode_t mode = monome_map_level_to_pad_mode(lvl, s_palette);
+    apc_pad_led_mode_t mode;
+    if (lvl != 0U) {
+        mode = monome_map_level_to_pad_mode(lvl, s_palette);
+    } else {
+        mode = apc_mode_get_pad_mode(x, y);
+    }
     leds_set_pad(y, x, mode, now_ticks);
+}
+
+void monome_mode_clear_grid_pad(uint8_t x, uint8_t y) {
+    if (x < 8U && y < 8U) {
+        s_grid_level[y][x] = 0U;
+    }
 }
 
 static void refresh_all_pad_leds(uint32_t now_ticks) {
     for (uint8_t y = 0; y < 8U; y++) {
         for (uint8_t x = 0; x < 8U; x++) {
-            refresh_pad_led(x, y, now_ticks);
+            monome_mode_refresh_pad(x, y, now_ticks);
         }
     }
 }
 
 void monome_mode_refresh_status_leds(void) {
-    for (uint8_t i = 0; i < 4U; i++) {
-        leds_set_round(APC_ROUND_GROUP_TRACK, i,
-                       (i == s_palette) ? APC_ROUND_LED_ON : APC_ROUND_LED_OFF);
-        leds_set_round(APC_ROUND_GROUP_TRACK, (uint8_t)(4U + i),
-                       (i == s_bright_idx) ? APC_ROUND_LED_ON : APC_ROUND_LED_OFF);
-    }
-    for (uint8_t i = 0; i < 8U; i++) {
-        bool on = (i == 1U) || (i == 2U && lua_vm_is_enabled());
-        leds_set_round(APC_ROUND_GROUP_SCENE, i, on ? APC_ROUND_LED_ON : APC_ROUND_LED_OFF);
-    }
+    leds_set_round(APC_ROUND_GROUP_SCENE, 2U,
+                   lua_vm_is_enabled() ? APC_ROUND_LED_ON : APC_ROUND_LED_OFF);
 }
 
 static void set_grid_pad_level(uint8_t x, uint8_t y, uint8_t level, uint32_t now_ticks) {
@@ -151,7 +158,8 @@ static void set_grid_pad_level(uint8_t x, uint8_t y, uint8_t level, uint32_t now
         return;
     }
     s_grid_level[y][x] = level;
-    refresh_pad_led(x, y, now_ticks);
+    apc_mode_clear_pad_mode(x, y);
+    monome_mode_refresh_pad(x, y, now_ticks);
 }
 
 static uint8_t cmd_payload_len(uint8_t cmd) {
@@ -166,11 +174,12 @@ static uint8_t cmd_payload_len(uint8_t cmd) {
         return 0U;
     case MEXT_CMD_LED_INTENSITY:
     case MEXT_CMD_LED_LEVEL_ALL:
+    case MEXT_CMD_TILT_DISABLE:
+    case MEXT_CMD_TILT_ENABLE:
         return 1U;
     case MEXT_CMD_SYS_SET_SIZE:
     case MEXT_CMD_LED_OFF:
     case MEXT_CMD_LED_ON:
-    case MEXT_CMD_TILT_SET:
         return 2U;
     case MEXT_CMD_LED_ROW:
     case MEXT_CMD_LED_COL:
@@ -228,7 +237,7 @@ static void execute_mext_cmd(uint8_t cmd, const uint8_t *p, uint32_t now_ticks) 
     }
 
     case MEXT_CMD_SYS_GET_ADDR: {
-        static const uint8_t k_addr_rep[2] = {MEXT_REP_SYS_ADDR, 1U};
+        static const uint8_t k_addr_rep[3] = {MEXT_REP_SYS_ADDR, 8U, 8U};
         usb_serial_write(k_addr_rep, sizeof(k_addr_rep));
         break;
     }
@@ -353,12 +362,42 @@ static void execute_mext_cmd(uint8_t cmd, const uint8_t *p, uint32_t now_ticks) 
         }
         break;
 
-    case MEXT_CMD_TILT_SET: {
-        uint8_t sensor = (uint8_t)(p[0] & 0x03U);
-        if (p[1] != 0U) {
-            s_tilt_mask |= (uint8_t)(1U << sensor);
+    case MEXT_CMD_TILT_DISABLE:
+    case MEXT_CMD_TILT_ENABLE: {
+        uint8_t val = p[0];
+        if (cmd == MEXT_CMD_TILT_ENABLE) {
+            if (val == 0xDFU) {
+                bootloader_enter_dfu();
+                break;
+            }
+            if (val == MIDI_STATUS_SYSEX_START) {
+                s_sysex_buf[0] = MIDI_STATUS_SYSEX_START;
+                s_sysex_pos = 1U;
+                break;
+            }
+            if (val == MIDI_STATUS_SYSEX_END && s_sysex_pos > 0U) {
+                if (s_sysex_pos < sizeof(s_sysex_buf)) {
+                    s_sysex_buf[s_sysex_pos++] = MIDI_STATUS_SYSEX_END;
+                    sysex_handle_msg(s_sysex_buf, s_sysex_pos);
+                }
+                s_sysex_pos = 0U;
+                break;
+            }
+            if (val < 4U) {
+                s_tilt_mask |= (uint8_t)(1U << val);
+            }
         } else {
-            s_tilt_mask &= (uint8_t)~(1U << sensor);
+            if (s_sysex_pos > 0U) {
+                if (s_sysex_pos < (sizeof(s_sysex_buf) - 1U)) {
+                    s_sysex_buf[s_sysex_pos++] = (uint8_t)(val & 0x7FU);
+                } else {
+                    s_sysex_pos = 0U;
+                }
+                break;
+            }
+            if (val < 4U) {
+                s_tilt_mask &= (uint8_t)~(1U << val);
+            }
         }
         break;
     }
@@ -369,7 +408,7 @@ static void execute_mext_cmd(uint8_t cmd, const uint8_t *p, uint32_t now_ticks) 
 }
 
 void monome_mode_init(uint32_t now_ticks) {
-    static const char k_default_id[8] = {'m', '1', '0', '0', '0', '0', '0', '1'};
+    static const char k_default_id[8] = {'A', 'P', 'C', ' ', 'M', 'I', 'N', 'I'};
     for (uint8_t i = 0; i < 32U; i++) {
         s_device_id[i] = (i < 8U) ? (uint8_t)k_default_id[i] : 0U;
     }
@@ -400,14 +439,14 @@ void monome_mode_set_overlay_led(uint8_t x, uint8_t y, uint8_t level, uint32_t n
         return;
     }
     s_overlay_level[y][x] = level;
-    refresh_pad_led(x, y, now_ticks);
+    monome_mode_refresh_pad(x, y, now_ticks);
 }
 
 void monome_mode_clear_overlay(uint32_t now_ticks) {
     for (uint8_t y = 0; y < 8U; y++) {
         for (uint8_t x = 0; x < 8U; x++) {
             s_overlay_level[y][x] = 0U;
-            refresh_pad_led(x, y, now_ticks);
+            monome_mode_refresh_pad(x, y, now_ticks);
         }
     }
 }
@@ -416,7 +455,10 @@ uint8_t monome_mode_get_host_led(uint8_t x, uint8_t y) {
     if (x >= 8U || y >= 8U) {
         return 0U;
     }
-    return s_grid_level[y][x];
+    if (s_grid_level[y][x] != 0U) {
+        return s_grid_level[y][x];
+    }
+    return apc_mode_get_host_led(x, y);
 }
 
 void monome_mode_send_key(uint8_t x, uint8_t y, bool pressed) {
@@ -460,7 +502,7 @@ void monome_mode_on_button(apc_btn_group_t group, uint8_t index, bool pressed, u
         return;
     }
 
-    if (group == APC_BTN_GROUP_TRACK && pressed && index < 8U) {
+    if (group == APC_BTN_GROUP_TRACK && buttons_shift_pressed() && pressed && index < 8U) {
         if (index < 4U) {
             s_palette = index;
             refresh_all_pad_leds(now_ticks);

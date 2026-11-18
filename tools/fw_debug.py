@@ -28,6 +28,7 @@ DIAG_SUB_CRASH_GET = 0x02
 DIAG_SUB_CRASH_CLR = 0x03
 DIAG_SUB_PEEK_MEM = 0x04
 DIAG_SUB_TEST_FAULT = 0x05
+DIAG_SUB_SET_PROFILE = 0x06
 
 APC_CRASH_MAGIC = 0x43525348  # "CRSH"
 
@@ -199,19 +200,32 @@ def main() -> int:
     parser.add_argument("--clear-crash", action="store_true", help="Erase the persistent crash log at 0x08007800")
     parser.add_argument("--peek", nargs="+", metavar=("ADDR", "LEN"), help="Read memory over SysEx (e.g. --peek 0x1FFFF7E0 16)")
     parser.add_argument("--test-fault", action="store_true", help="Deliberately trigger UDF #0 fault to test crash log -> DFU")
+    parser.add_argument("--profile", choices=["apc", "monome"], help="Switch USB profile remotely ('apc' 09E8:0028 or 'monome' 0403:6001)")
     args = parser.parse_args()
 
     import mido
 
     in_names = mido.get_input_names()
     out_names = mido.get_output_names()
-    in_name = next((n for n in in_names if "APC MINI" in n.upper()), None)
-    out_name = next((n for n in out_names if "APC MINI" in n.upper()), None)
+    in_name = next(
+        (n for n in in_names if "APC MINI" in n.upper() or "MONOME" in n.upper()),
+        None,
+    )
+    out_name = next(
+        (n for n in out_names if "APC MINI" in n.upper() or "MONOME" in n.upper()),
+        None,
+    )
     if not in_name or not out_name:
-        print(f"error: APC MINI MIDI port not found (inputs={in_names}, outputs={out_names})", file=sys.stderr)
+        print(f"error: APC MINI / monome MIDI port not found (inputs={in_names}, outputs={out_names})", file=sys.stderr)
         return 1
 
     with mido.open_input(in_name) as inport, mido.open_output(out_name) as outport:
+        if args.profile:
+            prof_val = 1 if args.profile == "monome" else 0
+            print(f"Switching USB profile on '{out_name}' to {args.profile} ({'0403:6001 serialosc + MIDI' if prof_val else '09E8:0028 APC MIDI'})...")
+            outport.send(mido.Message("sysex", data=[0x7D, ord("A"), ord("P"), ord("C"), DIAG_SUB_SET_PROFILE, prof_val]))
+            return 0
+
         if args.test_fault:
             print("Triggering deliberate UDF #0 fault (device will write 0x08007800 crash log and reboot into DFU)...")
             outport.send(mido.Message("sysex", data=[0x7D, ord("A"), ord("P"), ord("C"), DIAG_SUB_TEST_FAULT, 0x5A]))

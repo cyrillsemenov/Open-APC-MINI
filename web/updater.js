@@ -327,6 +327,7 @@ const ui = {
   midiInSelect: document.getElementById("midiInSelect"),
   btnConnectMidi: document.getElementById("btnConnectMidi"),
   btnProbeDevice: document.getElementById("btnProbeDevice"),
+  btnSwitchProfile: document.getElementById("btnSwitchProfile"),
   fwSourceBadge: document.getElementById("fwSourceBadge"),
   versionSelect: document.getElementById("versionSelect"),
   localFileZone: document.getElementById("localFileZone"),
@@ -396,6 +397,8 @@ function updateControlsState() {
   const hasMidiPorts = Boolean(ui.midiOutSelect.value && ui.midiInSelect.value);
   const canDiag = hasMidiPorts && !isFlashing && !isDiagBusy;
   ui.btnProbeDevice.disabled = !hasMidiPorts || isFlashing;
+  if (ui.btnSwitchProfile)
+    ui.btnSwitchProfile.disabled = !hasMidiPorts || isFlashing;
   ui.btnFlash.disabled = !hasMidiPorts || !activeBundle || isFlashing;
   ui.btnDownloadSyx.disabled = !activeBundle;
   ui.btnDownloadBin.disabled = !activeBundle;
@@ -609,7 +612,8 @@ ui.btnDownloadBin.addEventListener("click", () => {
 // WebMIDI Port Management & Handshake
 // =========================================================================
 function isApcPort(port) {
-  return (port.name || "").toLowerCase().includes("apc");
+  const n = (port.name || "").toLowerCase();
+  return n.includes("apc") || n.includes("monome") || n.includes("updater");
 }
 
 function refreshMidiPorts({ preferUpdater = false } = {}) {
@@ -661,6 +665,10 @@ function refreshMidiPorts({ preferUpdater = false } = {}) {
         (p.name || "").toLowerCase().includes("updater"),
       );
       if (updater) return updater;
+      const apc = list.find((p) =>
+        (p.name || "").toLowerCase().includes("apc"),
+      );
+      if (apc) return apc;
     }
     return list[0] || null;
   };
@@ -827,6 +835,47 @@ async function sendAndWaitAck(
 }
 
 // Probe device mode via Universal Device Inquiry (only Application responds to F0 7E 7F 06 01 F7)
+if (ui.btnSwitchProfile) {
+  ui.btnSwitchProfile.addEventListener("click", async () => {
+    try {
+      const { outPort, inPort } = getSelectedPorts();
+      const isMonome = (outPort.name || "").toLowerCase().includes("monome");
+      const targetVal = isMonome ? 0 : 1;
+      const targetLabel = isMonome
+        ? "APC MIDI (09E8:0028)"
+        : "Monome serialosc + MIDI (0403:6001)";
+      log(`Switching USB profile to ${targetLabel}...`, "warn");
+      await outPort.open().catch(() => {});
+      outPort.send(
+        new Uint8Array([
+          0xf0,
+          0x7d,
+          0x41,
+          0x50,
+          0x43,
+          DIAG_SUB_SET_PROFILE,
+          targetVal,
+          0xf7,
+        ]),
+      );
+      inPort.onmidimessage = null;
+      await outPort.close().catch(() => {});
+      await inPort.close().catch(() => {});
+      await sleep(1600);
+      for (let attempt = 0; attempt < 8; attempt++) {
+        await connectWebMidi({ silent: true });
+        if (ui.midiOutSelect.value && ui.midiInSelect.value) {
+          await readTelemetryAndCrash({ quiet: false });
+          break;
+        }
+        await sleep(500);
+      }
+    } catch (err) {
+      log(`Profile switch failed: ${err.message}`, "err");
+    }
+  });
+}
+
 ui.btnProbeDevice.addEventListener("click", async () => {
   try {
     const { outPort, inPort } = getSelectedPorts();
@@ -838,9 +887,10 @@ ui.btnProbeDevice.addEventListener("click", async () => {
       1200,
     );
     if (rx[1] === 0x7e && rx[3] === 0x06 && rx[4] === 0x02) {
-      ui.deviceModeLabel.textContent = "Mode: Application (0x47:0x28)";
+      ui.deviceModeLabel.textContent =
+        "Mode: Application (APC MINI + serialosc)";
       log(
-        "APC Mini responded in Application mode (Universal Identity Reply received).",
+        `APC Mini responded in Application mode on '${outPort.name}' (Simultaneous USB-MIDI + serialosc).`,
         "ok",
       );
       await readTelemetryAndCrash({ quiet: true });
@@ -1010,13 +1060,35 @@ async function flashCurrentBundle() {
       "ok",
     );
 
-    // Reconnect WebMIDI after the device re-enumerates back into Application mode
-    for (let attempt = 0; attempt < 6; attempt++) {
-      await sleep(700);
+    // Close bootloader handles and wait for application USB re-enumeration (09E8:0028 or 0403:6001)
+    inPort.onmidimessage = null;
+    await outPort.close().catch(() => {});
+    await inPort.close().catch(() => {});
+    await sleep(1400);
+
+    for (let attempt = 0; attempt < 10; attempt++) {
       await connectWebMidi({ silent: true });
       if (ui.midiOutSelect.value && ui.midiInSelect.value) {
-        break;
+        try {
+          const ports = getSelectedPorts();
+          await ports.outPort.open().catch(() => {});
+          await ports.inPort.open().catch(() => {});
+          const rx = await sendSysexAndWaitReply(
+            ports.outPort,
+            ports.inPort,
+            INQUIRY_SYSEX,
+            700,
+          );
+          if (rx && rx[1] === 0x7e) {
+            ui.deviceModeLabel.textContent =
+              "Mode: Application (APC MINI + serialosc)";
+            break;
+          }
+        } catch (_) {
+          // Keep polling while application finishes USB enumeration
+        }
       }
+      await sleep(600);
     }
   } catch (err) {
     ui.flashStateLabel.textContent = "Error";
@@ -1040,6 +1112,7 @@ const DIAG_SUB_CRASH_GET = 0x02;
 const DIAG_SUB_CRASH_CLR = 0x03;
 const DIAG_SUB_PEEK_MEM = 0x04;
 const DIAG_SUB_TEST_FAULT = 0x05;
+const DIAG_SUB_SET_PROFILE = 0x06;
 const APC_CRASH_MAGIC = 0x43525348; // "CRSH"
 
 const IPSR_NAMES = {
@@ -1308,6 +1381,8 @@ async function readTelemetryAndCrash({ quiet = false } = {}) {
     ui.diagStatusLabel.textContent = crashPresent
       ? "Crash Log Present"
       : "Healthy (0x08007800 Clean)";
+    ui.deviceModeLabel.textContent =
+      "Mode: Application (APC MINI + serialosc)";
 
     const crashRaw = await sendDiagRequest(DIAG_SUB_CRASH_GET);
     renderCrashLog(crashRaw);

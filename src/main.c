@@ -41,18 +41,16 @@ static void app_on_button(apc_btn_group_t group, uint8_t index, bool pressed) {
 
     if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
         monome_mode_on_button(group, index, pressed, s_loop_now);
-    } else {
-        apc_mode_on_button(group, index, pressed);
     }
+    apc_mode_on_button(group, index, pressed);
 }
 
 static void app_on_fader(uint8_t fader_idx, uint8_t value) {
     lua_vm_on_fader(fader_idx, value, s_loop_now);
     if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
         monome_mode_on_fader(fader_idx, value);
-    } else {
-        apc_mode_on_fader(fader_idx, value);
     }
+    apc_mode_on_fader(fader_idx, value);
 }
 
 int main(void) {
@@ -60,21 +58,18 @@ int main(void) {
     leds_init();
     buttons_init();
 
-    bool boot_monome = false;
+    bool boot_apc_only = false;
     bool boot_dfu = false;
-    buttons_scan_boot_chord(&boot_monome, &boot_dfu);
+    buttons_scan_boot_chord(&boot_apc_only, &boot_dfu);
+    (void)board_consume_post_dfu_monome();
     if (boot_dfu) {
         bootloader_enter_dfu();
     }
-    if (boot_monome) {
-        usb_select_boot_profile(USB_PROFILE_MONOME_FTDI);
-    }
+    usb_select_boot_profile(USB_PROFILE_MONOME_FTDI);
 
     usb_midi_init();
     apc_mode_init();
-    if (boot_monome) {
-        monome_mode_init(board_ticks());
-    }
+    monome_mode_init(board_ticks());
     faders_init();
     lua_vm_init(board_ticks());
     board_watchdog_init();
@@ -88,9 +83,8 @@ int main(void) {
         faders_task(app_on_fader);
         if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
             monome_mode_poll_rx(now);
-        } else {
-            apc_mode_poll_rx(now);
         }
+        apc_mode_poll_rx(now);
         lua_vm_task(board_ticks());
         leds_task(board_ticks());
         usb_midi_flush_tx();

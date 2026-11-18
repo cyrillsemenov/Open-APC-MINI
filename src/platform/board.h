@@ -35,3 +35,9 @@ uint32_t board_loop_count(void);
 
 // Returns worst-case main-loop turnaround time in 0.5 ms SysTick units.
 uint16_t board_max_loop_ticks(void);
+
+// Saves or clears the post-DFU Monome serialosc resume flag in STM32 BKP_DR1 (0x40006C04).
+void board_set_post_dfu_monome(bool enable);
+
+// Returns true (and clears BKP_DR1) if the previous session entered DFU from Monome mode.
+bool board_consume_post_dfu_monome(void);

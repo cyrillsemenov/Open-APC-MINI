@@ -33,9 +33,9 @@
 #define FTDI_MODEM_STATUS_B1 0x60U
 
 static usbd_device *s_usbd_dev = NULL;
-static uint8_t s_usbd_ctrl_buf[128];
+static uint8_t s_usbd_ctrl_buf[192];
 static volatile bool s_usb_configured = false;
-static usb_profile_t s_active_profile = USB_PROFILE_APC_MIDI;
+static usb_profile_t s_active_profile = USB_PROFILE_MONOME_FTDI;
 static uint8_t s_ftdi_latency = 2U;
 
 static uint8_t s_tx_ring[USB_MIDI_TX_RING_LEN][4];
@@ -186,9 +186,11 @@ static void usb_set_config_cb(usbd_device *usbd_dev, uint16_t wValue) {
     }
 
     if (s_active_profile == USB_PROFILE_MONOME_FTDI) {
-        usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, usb_ftdi_out_cb);
+        usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_out_cb);
         usbd_ep_setup(usbd_dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_in_cb);
         usbd_ep_setup(usbd_dev, 0x02, USB_ENDPOINT_ATTR_BULK, 64, usb_ftdi_out_cb);
+        usbd_ep_setup(usbd_dev, 0x03, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_out_cb);
+        usbd_ep_setup(usbd_dev, 0x83, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_in_cb);
         usbd_register_control_callback(usbd_dev, USB_REQ_TYPE_VENDOR, USB_REQ_TYPE_TYPE,
                                        usb_ftdi_control_cb);
     } else {
@@ -297,6 +299,9 @@ uint16_t usb_midi_ep1_write(const uint8_t *buf, uint16_t len) {
     if (s_usbd_dev == NULL) {
         return 0;
     }
+    if (s_active_profile == USB_PROFILE_MONOME_FTDI) {
+        usbd_ep_write_packet(s_usbd_dev, 0x83, buf, len);
+    }
     return usbd_ep_write_packet(s_usbd_dev, 0x81, buf, len);
 }
 
@@ -367,14 +372,8 @@ void usb_midi_flush_tx(void) {
         return;
     }
 
-    if ((*USB_EP_REG(USB_EP1) & USB_EP_TX_STAT) == USB_EP_TX_STAT_VALID) {
-        return;
-    }
-
-    if (s_active_profile == USB_PROFILE_MONOME_FTDI) {
-        if (s_ser_tx_tail == s_ser_tx_head) {
-            return;
-        }
+    if (s_active_profile == USB_PROFILE_MONOME_FTDI && s_ser_tx_tail != s_ser_tx_head &&
+        ((*USB_EP_REG(USB_EP1) & USB_EP_TX_STAT) != USB_EP_TX_STAT_VALID)) {
         uint8_t pkt[64];
         pkt[0] = FTDI_MODEM_STATUS_B0;
         pkt[1] = FTDI_MODEM_STATUS_B1;
@@ -385,11 +384,16 @@ void usb_midi_flush_tx(void) {
             s_ser_tx_tail = (uint8_t)((s_ser_tx_tail + 1U) & (USB_SER_TX_RING_LEN - 1U));
         }
 
-        usb_midi_ep1_write(pkt, offset);
-        return;
+        usbd_ep_write_packet(s_usbd_dev, 0x81, pkt, offset);
     }
 
     if (s_tx_tail == s_tx_head) {
+        return;
+    }
+
+    uint8_t midi_ep_idx = (s_active_profile == USB_PROFILE_MONOME_FTDI) ? USB_EP3 : USB_EP1;
+    uint8_t midi_ep_addr = (s_active_profile == USB_PROFILE_MONOME_FTDI) ? 0x83U : 0x81U;
+    if ((*USB_EP_REG(midi_ep_idx) & USB_EP_TX_STAT) == USB_EP_TX_STAT_VALID) {
         return;
     }
 
@@ -409,7 +413,7 @@ void usb_midi_flush_tx(void) {
         pkt[offset++] = 0;
     }
 
-    usb_midi_ep1_write(pkt, sizeof(pkt));
+    usbd_ep_write_packet(s_usbd_dev, midi_ep_addr, pkt, sizeof(pkt));
 }
 
 void usb_midi_poll_rx(usb_midi_channel_cb_t on_channel_msg, usb_midi_sysex_cb_t on_sysex_msg) {

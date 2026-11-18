@@ -572,36 +572,52 @@ def build_upload_sysex_packets(
 
 
 def send_packets_to_hardware(packets: list[list[int]]) -> str:
-    """Sends Lua SysEx frames over either Monome FTDI serial or APC USB-MIDI."""
+    """Sends Lua SysEx frames over APC/monome USB-MIDI, Monome FTDI serial, or serialoscd UDP OSC."""
+    try:
+        import mido
+
+        out_names = mido.get_output_names()
+        target = next(
+            (n for n in out_names if "APC MINI" in n.upper() or "MONOME" in n.upper()),
+            None,
+        )
+        if target is not None:
+            with mido.open_output(target) as outport:
+                for pkt in packets:
+                    outport.send(mido.Message("sysex", data=pkt[1:-1]))
+                    time.sleep(0.004)
+            return f"USB-MIDI ({target})"
+    except Exception:
+        pass
+
     serial_devs = sorted(
         glob.glob("/dev/cu.usbserial-m*")
         + glob.glob("/dev/tty.usbserial-m*")
         + glob.glob("/dev/ttyUSB*")
     )
-    if serial_devs:
-        dev = serial_devs[0]
-        fd = os.open(dev, os.O_WRONLY | os.O_NOCTTY | os.O_NONBLOCK)
+    for dev in serial_devs:
         try:
-            for pkt in packets:
-                os.write(fd, bytes(pkt))
-                time.sleep(0.004)
-        finally:
-            os.close(fd)
-        return f"Monome FTDI serial ({dev})"
+            fd = os.open(dev, os.O_WRONLY | os.O_NOCTTY | os.O_NONBLOCK)
+            try:
+                for pkt in packets:
+                    os.write(fd, bytes(pkt))
+                    time.sleep(0.004)
+            finally:
+                os.close(fd)
+            return f"Monome FTDI serial ({dev})"
+        except OSError:
+            pass
 
-    import mido
+    from tools.serialosc_osc import serialosc_send_sysex
 
-    out_names = mido.get_output_names()
-    target = next((n for n in out_names if "APC MINI" in n.upper()), None)
-    if target is None:
-        raise RuntimeError(
-            f"No APC Mini found in Monome serial (/dev/cu.usbserial-m*) or MIDI ({out_names})"
-        )
-    with mido.open_output(target) as outport:
-        for pkt in packets:
-            outport.send(mido.Message("sysex", data=pkt[1:-1]))
-            time.sleep(0.004)
-    return f"USB-MIDI ({target})"
+    osc_via = serialosc_send_sysex(packets)
+    if osc_via is not None:
+        return osc_via
+
+    raise RuntimeError(
+        "No APC Mini found in USB-MIDI ('APC MINI' / 'monome 64'), "
+        "Monome FTDI serial (/dev/cu.usbserial-m*), or serialoscd UDP OSC (127.0.0.1:12002)"
+    )
 
 
 def format_c_array(image: bytes, var_name: str = "k_rom_script") -> str:
