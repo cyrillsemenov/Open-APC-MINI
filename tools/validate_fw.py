@@ -922,13 +922,13 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
     diag_sysex = extract_usb_midi_sysex(diag_pkts)
     subcmd, telem_bytes = decode_diag_nibbles(diag_sysex)
     check(
-        subcmd == 0x01 and len(telem_bytes) == 28,
+        subcmd == 0x01 and len(telem_bytes) == 30,
         f"Bad diagnostic telemetry reply (subcmd={subcmd}, len={len(telem_bytes)})",
     )
     _, _, flash_kb, idcode, _, loop_cnt, _ = struct.unpack("<BBHIIIH", telem_bytes[:18])
     check(
-        flash_kb == 128 and idcode == 0x10016410 and loop_cnt > 0,
-        f"Unexpected telemetry values: flash_kb={flash_kb}, idcode=0x{idcode:08X}, loops={loop_cnt}",
+        flash_kb == 128 and idcode == 0x10016410 and loop_cnt > 0 and telem_bytes[28] == 0x0B,
+        f"Unexpected telemetry values: flash_kb={flash_kb}, idcode=0x{idcode:08X}, loops={loop_cnt}, flags=0x{telem_bytes[28]:02X}",
     )
 
     # 10. Simultaneous Monome serialosc (FTDI 0403:6001) & APC MINI USB-MIDI Composite Verification
@@ -1056,18 +1056,11 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         "FTDI vendor reqs, mext /sys, top-left (0,0) keys, varibright+intensity, fader tilt",
     )
 
-    # 10. On-Chip Lua Co-Processor alongside serialosc (SHIFT + SCENE 3 + live upload)
-    # Toggle Lua Co-Processor ON: Hold Shift (col=10, row=0) + Scene 3 (col=9, row=2)
-    mcu.pressed_buttons = {(10, 0), (9, 2)}
-    for _ in range(6):
-        for _ in range(8):
-            mcu.call_isr(VEC_SYSTICK)
-        mcu.run_steps(40_000)
-    mcu.pressed_buttons.clear()
-    for _ in range(6):
-        for _ in range(8):
-            mcu.call_isr(VEC_SYSTICK)
-        mcu.run_steps(20_000)
+    # 10. On-Chip Lua Co-Processor alongside serialosc (SysEx mode control 0x06 + live upload)
+    # Enable Lua Co-Processor via SysEx: F0 7D 'A' 'P' 'C' 0x06 0x0F F7 (MIDI | SERIALOSC | LUA | ABLETON)
+    mcu.usb_ep_out(2, bytes([0xF0, 0x7D, 0x41, 0x50, 0x43, 0x06, 0x0F, 0xF7]))
+    mcu.run_steps(40_000)
+    mcu.usb_poll_midi_in()
     mcu.usb_poll_ep1_in()
 
     # Press top-left pad (col=0, row=0 -> Monome x=0, y=0) while Lua Co-Processor is active:

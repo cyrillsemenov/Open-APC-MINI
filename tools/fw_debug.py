@@ -28,7 +28,12 @@ DIAG_SUB_CRASH_GET = 0x02
 DIAG_SUB_CRASH_CLR = 0x03
 DIAG_SUB_PEEK_MEM = 0x04
 DIAG_SUB_TEST_FAULT = 0x05
-DIAG_SUB_SET_PROFILE = 0x06
+DIAG_SUB_SET_MODES = 0x06
+
+APC_MODE_FLAG_MIDI = 0x01
+APC_MODE_FLAG_SERIALOSC = 0x02
+APC_MODE_FLAG_LUA = 0x04
+APC_MODE_FLAG_ABLETON = 0x08
 
 APC_CRASH_MAGIC = 0x43525348  # "CRSH"
 
@@ -200,7 +205,12 @@ def main() -> int:
     parser.add_argument("--clear-crash", action="store_true", help="Erase the persistent crash log at 0x08007800")
     parser.add_argument("--peek", nargs="+", metavar=("ADDR", "LEN"), help="Read memory over SysEx (e.g. --peek 0x1FFFF7E0 16)")
     parser.add_argument("--test-fault", action="store_true", help="Deliberately trigger UDF #0 fault to test crash log -> DFU")
-    parser.add_argument("--profile", choices=["apc", "monome"], help="Switch USB profile remotely ('apc' 09E8:0028 or 'monome' 0403:6001)")
+    parser.add_argument("--midi", type=int, choices=[0, 1], help="Enable (1) or disable (0) MIDI Note/CC mode")
+    parser.add_argument("--serialosc", type=int, choices=[0, 1], help="Enable (1) or disable (0) Monome serialosc mext mode")
+    parser.add_argument("--lua", type=int, choices=[0, 1], help="Enable (1) or disable (0) On-Chip Lua Co-Processor")
+    parser.add_argument("--ableton", type=int, choices=[0, 1], help="Enable (1) or disable (0) Ableton Live Intro (0x60) handshake")
+    parser.add_argument("--palette", type=int, choices=[0, 1, 2, 3], help="Set Monome grid color palette (0..3)")
+    parser.add_argument("--brightness", type=int, choices=[0, 1, 2, 3], help="Set LED brightness preset (0..3)")
     args = parser.parse_args()
 
     import mido
@@ -220,10 +230,46 @@ def main() -> int:
         return 1
 
     with mido.open_input(in_name) as inport, mido.open_output(out_name) as outport:
-        if args.profile:
-            prof_val = 1 if args.profile == "monome" else 0
-            print(f"Switching USB profile on '{out_name}' to {args.profile} ({'0403:6001 serialosc + MIDI' if prof_val else '09E8:0028 APC MIDI'})...")
-            outport.send(mido.Message("sysex", data=[0x7D, ord("A"), ord("P"), ord("C"), DIAG_SUB_SET_PROFILE, prof_val]))
+        if any(
+            v is not None
+            for v in (
+                args.midi,
+                args.serialosc,
+                args.lua,
+                args.ableton,
+                args.palette,
+                args.brightness,
+            )
+        ):
+            telem_cur = send_and_recv(outport, inport, DIAG_SUB_TELEMETRY)
+            flags = telem_cur[28] if len(telem_cur) >= 30 else 0x0B
+            pal = (telem_cur[29] & 0x03) if len(telem_cur) >= 30 else 0
+            bri = ((telem_cur[29] >> 4) & 0x03) if len(telem_cur) >= 30 else 3
+            for bit, opt in (
+                (APC_MODE_FLAG_MIDI, args.midi),
+                (APC_MODE_FLAG_SERIALOSC, args.serialosc),
+                (APC_MODE_FLAG_LUA, args.lua),
+                (APC_MODE_FLAG_ABLETON, args.ableton),
+            ):
+                if opt is not None:
+                    flags = (flags | bit) if opt else (flags & ~bit)
+            if args.palette is not None:
+                pal = args.palette & 0x03
+            if args.brightness is not None:
+                bri = args.brightness & 0x03
+            rep = send_and_recv(
+                outport, inport, DIAG_SUB_SET_MODES, [flags & 0x0F, pal, bri]
+            )
+            nf = rep[0] if len(rep) >= 2 else flags
+            np = (rep[1] & 0x03) if len(rep) >= 2 else pal
+            nb = ((rep[1] >> 4) & 0x03) if len(rep) >= 2 else bri
+            print(
+                f"Updated Modes: MIDI={'ON' if nf & 1 else 'OFF'} | "
+                f"serialosc={'ON' if nf & 2 else 'OFF'} | "
+                f"Lua={'ON' if nf & 4 else 'OFF'} | "
+                f"Ableton={'ON' if nf & 8 else 'OFF'} | "
+                f"Palette={np} | Brightness={nb}"
+            )
             return 0
 
         if args.test_fault:
@@ -253,6 +299,8 @@ def main() -> int:
         )
         faders = list(telem[18:27])
         shift = telem[27]
+        mode_flags = telem[28] if len(telem) >= 30 else 0x0B
+        pal_bri = telem[29] if len(telem) >= 30 else 0x30
 
         uptime_s = uptime_ticks * 0.0005
         avg_hz = (loop_cnt / uptime_s) if uptime_s > 0 else 0.0
@@ -262,6 +310,13 @@ def main() -> int:
         print(f"  Last Reset    : {', '.join(decode_reset_flags(rst_flags))}")
         print(f"  Uptime        : {uptime_s:.2f} s ({uptime_ticks} ticks)")
         print(f"  Main Loop     : {loop_cnt} turns (~{avg_hz:.0f} Hz) | Max turn={max_loop_ticks * 0.5:.1f} ms ({max_loop_ticks} ticks)")
+        print(
+            f"  Active Modes  : MIDI={'ON' if mode_flags & 1 else 'OFF'} | "
+            f"serialosc={'ON' if mode_flags & 2 else 'OFF'} | "
+            f"Lua={'ON' if mode_flags & 4 else 'OFF'} | "
+            f"Ableton={'ON' if mode_flags & 8 else 'OFF'} | "
+            f"Palette={pal_bri & 3} | Brightness={(pal_bri >> 4) & 3}"
+        )
         print(f"  Faders (1..9) : {faders} | Shift={shift}")
         print()
 

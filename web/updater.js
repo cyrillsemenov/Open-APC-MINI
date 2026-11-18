@@ -351,6 +351,12 @@ const ui = {
   btnLedSweep: document.getElementById("btnLedSweep"),
   btnLedClear: document.getElementById("btnLedClear"),
   btnTriggerFault: document.getElementById("btnTriggerFault"),
+  chkModeMidi: document.getElementById("chkModeMidi"),
+  chkModeSerialosc: document.getElementById("chkModeSerialosc"),
+  chkModeLua: document.getElementById("chkModeLua"),
+  chkModeAbleton: document.getElementById("chkModeAbleton"),
+  selPalette: document.getElementById("selPalette"),
+  selBrightness: document.getElementById("selBrightness"),
   telemSilicon: document.getElementById("telemSilicon"),
   telemReset: document.getElementById("telemReset"),
   telemUptime: document.getElementById("telemUptime"),
@@ -411,6 +417,12 @@ function updateControlsState() {
   if (ui.btnLedClear) ui.btnLedClear.disabled = !canDiag;
   if (ui.btnTriggerFault) ui.btnTriggerFault.disabled = !canDiag;
   if (ui.btnPeekMem) ui.btnPeekMem.disabled = !canDiag;
+  if (ui.chkModeMidi) ui.chkModeMidi.disabled = !canDiag;
+  if (ui.chkModeSerialosc) ui.chkModeSerialosc.disabled = !canDiag;
+  if (ui.chkModeLua) ui.chkModeLua.disabled = !canDiag;
+  if (ui.chkModeAbleton) ui.chkModeAbleton.disabled = !canDiag;
+  if (ui.selPalette) ui.selPalette.disabled = !canDiag;
+  if (ui.selBrightness) ui.selBrightness.disabled = !canDiag;
 }
 
 function setLoadedBundle(versionLabel, bundle) {
@@ -765,7 +777,12 @@ async function connectWebMidi({ silent = false, preferUpdater = false } = {}) {
   }
 }
 
-ui.btnConnectMidi.addEventListener("click", () => connectWebMidi());
+ui.btnConnectMidi.addEventListener("click", async () => {
+  const ok = await connectWebMidi();
+  if (ok && ui.midiOutSelect.value && ui.midiInSelect.value) {
+    await readTelemetryAndCrash({ quiet: false });
+  }
+});
 
 function getSelectedPorts() {
   if (!midiAccess) throw new Error("WebMIDI not connected");
@@ -1112,8 +1129,57 @@ const DIAG_SUB_CRASH_GET = 0x02;
 const DIAG_SUB_CRASH_CLR = 0x03;
 const DIAG_SUB_PEEK_MEM = 0x04;
 const DIAG_SUB_TEST_FAULT = 0x05;
-const DIAG_SUB_SET_PROFILE = 0x06;
+const DIAG_SUB_SET_MODES = 0x06;
 const APC_CRASH_MAGIC = 0x43525348; // "CRSH"
+
+function syncModeControlsFromFirmware(flags, palBri) {
+  if (ui.chkModeMidi) ui.chkModeMidi.checked = (flags & 0x01) !== 0;
+  if (ui.chkModeSerialosc) ui.chkModeSerialosc.checked = (flags & 0x02) !== 0;
+  if (ui.chkModeLua) ui.chkModeLua.checked = (flags & 0x04) !== 0;
+  if (ui.chkModeAbleton) ui.chkModeAbleton.checked = (flags & 0x08) !== 0;
+  if (ui.selPalette) ui.selPalette.value = String(palBri & 0x03);
+  if (ui.selBrightness) ui.selBrightness.value = String((palBri >> 4) & 0x03);
+}
+
+async function applyModeControlsToFirmware() {
+  if (isFlashing || isDiagBusy) return;
+  let flags = 0;
+  if (ui.chkModeMidi && ui.chkModeMidi.checked) flags |= 0x01;
+  if (ui.chkModeSerialosc && ui.chkModeSerialosc.checked) flags |= 0x02;
+  if (ui.chkModeLua && ui.chkModeLua.checked) flags |= 0x04;
+  if (ui.chkModeAbleton && ui.chkModeAbleton.checked) flags |= 0x08;
+  const pal = ui.selPalette ? parseInt(ui.selPalette.value, 10) & 3 : 0;
+  const bri = ui.selBrightness ? parseInt(ui.selBrightness.value, 10) & 3 : 3;
+
+  isDiagBusy = true;
+  updateControlsState();
+  try {
+    const rep = await sendDiagRequest(DIAG_SUB_SET_MODES, [flags, pal, bri]);
+    if (rep && rep.length >= 2) {
+      syncModeControlsFromFirmware(rep[0], rep[1]);
+    }
+    log(
+      `Modes updated via SysEx: MIDI=${flags & 1 ? "ON" : "OFF"}, serialosc=${flags & 2 ? "ON" : "OFF"}, Lua=${flags & 4 ? "ON" : "OFF"}, Ableton=${flags & 8 ? "ON" : "OFF"} (Palette=${pal}, Brightness=${bri}).`,
+      "ok",
+    );
+  } catch (err) {
+    log(`Failed to update modes via SysEx: ${err.message}`, "err");
+  } finally {
+    isDiagBusy = false;
+    updateControlsState();
+  }
+}
+
+for (const el of [
+  ui.chkModeMidi,
+  ui.chkModeSerialosc,
+  ui.chkModeLua,
+  ui.chkModeAbleton,
+  ui.selPalette,
+  ui.selBrightness,
+]) {
+  if (el) el.addEventListener("change", applyModeControlsToFirmware);
+}
 
 const IPSR_NAMES = {
   2: "NMI (Non-Maskable Interrupt / HSE Clock Security)",
@@ -1368,6 +1434,9 @@ async function readTelemetryAndCrash({ quiet = false } = {}) {
     const maxLoopTicks = dv.getUint16(16, true);
     const faders = Array.from(telem.subarray(18, 27));
     const shift = dv.getUint8(27);
+    if (telem.length >= 30) {
+      syncModeControlsFromFirmware(dv.getUint8(28), dv.getUint8(29));
+    }
 
     const uptimeS = uptimeTicks * 0.0005;
     const hz = uptimeS > 0 ? Math.round(loopCnt / uptimeS) : 0;

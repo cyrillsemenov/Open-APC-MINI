@@ -109,20 +109,8 @@ static bool is_valid_lua_image(const uint8_t *img, uint16_t max_len) {
     return (code_len > 0U) && ((uint32_t)LUA_HEADER_SIZE + (uint32_t)code_len <= (uint32_t)max_len);
 }
 
-static void refresh_mode_status_leds(void) {
-    if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
-        monome_mode_refresh_status_leds();
-    } else {
-        apc_mode_refresh_status_leds();
-    }
-}
-
 static void set_overlay_led(uint8_t x, uint8_t y, uint8_t level, uint32_t now_ticks) {
-    if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
-        monome_mode_set_overlay_led(x, y, level, now_ticks);
-    } else {
-        apc_mode_set_overlay_led(x, y, level, now_ticks);
-    }
+    monome_mode_set_overlay_led(x, y, level, now_ticks);
 }
 
 static void clear_overlay_leds(uint32_t now_ticks) {
@@ -134,13 +122,16 @@ static void emit_grid_key_event(uint8_t x, uint8_t y, bool pressed) {
     if (x >= 8U || y >= 8U) {
         return;
     }
-    if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
+    uint8_t flags = apc_mode_get_flags();
+    if ((flags & APC_MODE_FLAG_SERIALOSC) != 0U) {
         monome_mode_send_key(x, y, pressed);
     }
-    uint8_t note = (uint8_t)((7U - y) * 8U + x);
-    uint8_t cin = pressed ? USB_MIDI_CIN_NOTE_ON : USB_MIDI_CIN_NOTE_OFF;
-    uint8_t st = pressed ? MIDI_STATUS_NOTE_ON : MIDI_STATUS_NOTE_OFF;
-    usb_midi_send_event(cin, st, note, pressed ? APC_DEFAULT_VELOCITY : 0U);
+    if ((flags & APC_MODE_FLAG_MIDI) != 0U) {
+        uint8_t note = (uint8_t)((7U - y) * 8U + x);
+        uint8_t cin = pressed ? USB_MIDI_CIN_NOTE_ON : USB_MIDI_CIN_NOTE_OFF;
+        uint8_t st = pressed ? MIDI_STATUS_NOTE_ON : MIDI_STATUS_NOTE_OFF;
+        usb_midi_send_event(cin, st, note, pressed ? APC_DEFAULT_VELOCITY : 0U);
+    }
 }
 
 static void flush_all_gates(void) {
@@ -241,37 +232,49 @@ static int32_t call_builtin(lua_coro_t *c, uint8_t fn_id, uint8_t argc, const in
     }
 
     case LUA_FN_TILT:
-        monome_mode_send_tilt((uint8_t)(args[0] & 3), (int16_t)args[1], (int16_t)args[2],
-                              (int16_t)args[3]);
+        if ((apc_mode_get_flags() & APC_MODE_FLAG_SERIALOSC) != 0U) {
+            monome_mode_send_tilt((uint8_t)(args[0] & 3), (int16_t)args[1], (int16_t)args[2],
+                                  (int16_t)args[3]);
+        }
         return 0;
 
     case LUA_FN_NOTE_ON: {
         uint8_t ch = (uint8_t)(args[0] & 0x0FU);
         uint8_t note = (uint8_t)(args[1] & 0x7FU);
         uint8_t vel = (uint8_t)(args[2] & 0x7FU);
-        if (usb_get_profile() == USB_PROFILE_MONOME_FTDI && note < 64U) {
+        uint8_t flags = apc_mode_get_flags();
+        if ((flags & APC_MODE_FLAG_SERIALOSC) != 0U && note < 64U) {
             monome_mode_send_key((uint8_t)(note & 7U), (uint8_t)(7U - (note >> 3U)), vel > 0U);
         }
-        usb_midi_send_event(USB_MIDI_CIN_NOTE_ON, (uint8_t)(MIDI_STATUS_NOTE_ON | ch), note, vel);
+        if ((flags & APC_MODE_FLAG_MIDI) != 0U) {
+            usb_midi_send_event(USB_MIDI_CIN_NOTE_ON, (uint8_t)(MIDI_STATUS_NOTE_ON | ch), note,
+                                vel);
+        }
         return 0;
     }
 
     case LUA_FN_NOTE_OFF: {
         uint8_t ch = (uint8_t)(args[0] & 0x0FU);
         uint8_t note = (uint8_t)(args[1] & 0x7FU);
-        if (usb_get_profile() == USB_PROFILE_MONOME_FTDI && note < 64U) {
+        uint8_t flags = apc_mode_get_flags();
+        if ((flags & APC_MODE_FLAG_SERIALOSC) != 0U && note < 64U) {
             monome_mode_send_key((uint8_t)(note & 7U), (uint8_t)(7U - (note >> 3U)), false);
         }
-        usb_midi_send_event(USB_MIDI_CIN_NOTE_OFF, (uint8_t)(MIDI_STATUS_NOTE_OFF | ch), note, 0U);
+        if ((flags & APC_MODE_FLAG_MIDI) != 0U) {
+            usb_midi_send_event(USB_MIDI_CIN_NOTE_OFF, (uint8_t)(MIDI_STATUS_NOTE_OFF | ch), note,
+                                0U);
+        }
         return 0;
     }
 
     case LUA_FN_CC: {
-        uint8_t ch = (uint8_t)(args[0] & 0x0FU);
-        uint8_t cc = (uint8_t)(args[1] & 0x7FU);
-        uint8_t val = (uint8_t)(args[2] & 0x7FU);
-        usb_midi_send_event(USB_MIDI_CIN_CONTROL_CHANGE,
-                            (uint8_t)(MIDI_STATUS_CONTROL_CHANGE | ch), cc, val);
+        if ((apc_mode_get_flags() & APC_MODE_FLAG_MIDI) != 0U) {
+            uint8_t ch = (uint8_t)(args[0] & 0x0FU);
+            uint8_t cc = (uint8_t)(args[1] & 0x7FU);
+            uint8_t val = (uint8_t)(args[2] & 0x7FU);
+            usb_midi_send_event(USB_MIDI_CIN_CONTROL_CHANGE,
+                                (uint8_t)(MIDI_STATUS_CONTROL_CHANGE | ch), cc, val);
+        }
         return 0;
     }
 
@@ -740,22 +743,20 @@ bool lua_vm_is_enabled(void) {
     return s_enabled;
 }
 
-void lua_vm_set_enabled(bool enabled, uint32_t now_ticks) {
-    if (s_enabled == enabled) {
-        return;
-    }
-    s_enabled = enabled;
+void lua_vm_toggle(uint32_t now_ticks) {
+    s_enabled = !s_enabled;
     s_tick_coro.active = false;
     flush_all_gates();
     clear_overlay_leds(now_ticks);
     if (s_enabled) {
         reset_vm_state(now_ticks);
     }
-    refresh_mode_status_leds();
 }
 
-void lua_vm_toggle(uint32_t now_ticks) {
-    lua_vm_set_enabled(!s_enabled, now_ticks);
+void lua_vm_set_enabled(bool enabled, uint32_t now_ticks) {
+    if (s_enabled != enabled) {
+        lua_vm_toggle(now_ticks);
+    }
 }
 
 void lua_vm_task(uint32_t now_ticks) {
@@ -856,7 +857,6 @@ void lua_vm_handle_sysex(const uint8_t *msg, uint16_t len) {
                 s_enabled = true;
                 clear_overlay_leds(now);
                 reset_vm_state(now);
-                refresh_mode_status_leds();
                 send_lua_ack(0x01U);
             } else {
                 send_lua_ack(0x00U);
@@ -881,7 +881,6 @@ void lua_vm_handle_sysex(const uint8_t *msg, uint16_t len) {
         s_active_image = k_rom_script;
         clear_overlay_leds(now);
         reset_vm_state(now);
-        refresh_mode_status_leds();
         send_lua_ack(0x01U);
         break;
 

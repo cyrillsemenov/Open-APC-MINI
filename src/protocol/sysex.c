@@ -11,12 +11,12 @@
 #include "sysex.h"
 #include "usb_midi.h"
 
-#define DIAG_SYSEX_SUB_TELEMETRY   0x01U
-#define DIAG_SYSEX_SUB_CRASH_GET   0x02U
-#define DIAG_SYSEX_SUB_CRASH_CLR   0x03U
-#define DIAG_SYSEX_SUB_PEEK_MEM    0x04U
-#define DIAG_SYSEX_SUB_TEST_FAULT  0x05U
-#define DIAG_SYSEX_SUB_SET_PROFILE 0x06U
+#define DIAG_SYSEX_SUB_TELEMETRY  0x01U
+#define DIAG_SYSEX_SUB_CRASH_GET  0x02U
+#define DIAG_SYSEX_SUB_CRASH_CLR  0x03U
+#define DIAG_SYSEX_SUB_PEEK_MEM   0x04U
+#define DIAG_SYSEX_SUB_TEST_FAULT 0x05U
+#define DIAG_SYSEX_SUB_SET_MODES  0x06U
 
 static uint8_t s_sysex_dev_id = 0;
 static uint8_t s_serial_buf[16];
@@ -58,7 +58,7 @@ static void handle_diag_sysex(const uint8_t *msg, uint16_t len) {
     uint8_t subcmd = msg[5];
 
     if (subcmd == DIAG_SYSEX_SUB_TELEMETRY) {
-        uint8_t payload[28];
+        uint8_t payload[30];
         const volatile apc_crash_log_t *crash =
             (const volatile apc_crash_log_t *)(uintptr_t)_crash_log_page;
 
@@ -71,6 +71,9 @@ static void handle_diag_sysex(const uint8_t *msg, uint16_t len) {
         put_u16_le(&payload[16], board_max_loop_ticks());
         faders_get_values(&payload[18]);
         payload[27] = buttons_shift_pressed() ? 1U : 0U;
+        payload[28] = apc_mode_get_flags();
+        payload[29] = (uint8_t)(((monome_mode_get_brightness() & 0x03U) << 4U) |
+                                (monome_mode_get_palette() & 0x03U));
 
         send_diag_nibbles(DIAG_SYSEX_SUB_TELEMETRY, payload, sizeof(payload));
         return;
@@ -111,17 +114,23 @@ static void handle_diag_sysex(const uint8_t *msg, uint16_t len) {
         __asm__ volatile(".short 0xde00");
     }
 
-    if (subcmd == DIAG_SYSEX_SUB_SET_PROFILE && len == 8U) {
+    if (subcmd == DIAG_SYSEX_SUB_SET_MODES && len >= 8U) {
         uint32_t now = board_ticks();
-        if (msg[6] != 0U) {
-            monome_mode_init(now);
-            usb_switch_profile(USB_PROFILE_MONOME_FTDI);
-        } else {
-            leds_all_off(now);
-            leds_set_brightness(7U, now);
-            apc_mode_init();
-            usb_switch_profile(USB_PROFILE_APC_MIDI);
+        if (msg[6] <= 0x0FU) {
+            apc_mode_set_flags(msg[6], now);
         }
+        if (len >= 9U && msg[7] < 4U) {
+            monome_mode_set_palette(msg[7], now);
+        }
+        if (len >= 10U && msg[8] < 4U) {
+            monome_mode_set_brightness(msg[8], now);
+        }
+        uint8_t rep[2] = {
+            apc_mode_get_flags(),
+            (uint8_t)(((monome_mode_get_brightness() & 0x03U) << 4U) |
+                      (monome_mode_get_palette() & 0x03U)),
+        };
+        send_diag_nibbles(DIAG_SYSEX_SUB_SET_MODES, rep, sizeof(rep));
     }
 }
 
@@ -217,7 +226,7 @@ void sysex_handle_msg(const uint8_t *msg, uint16_t len) {
 
     // Akai APC Mini vendor messages: F0 47 <dev> 28 <cmd> ...
     if (len >= 8U && msg[1] == AKAI_MANUFACTURER_ID && msg[2] <= 0x7FU &&
-        msg[3] == AKAI_APC_MINI_MODEL_ID) {
+        msg[3] == AKAI_APC_MINI_MODEL_ID && (apc_mode_get_flags() & APC_MODE_FLAG_ABLETON) != 0U) {
         uint8_t cmd = msg[4];
 
         // Akai Serial Write: F0 47 <dev> 28 79 00 10 <16B> F7

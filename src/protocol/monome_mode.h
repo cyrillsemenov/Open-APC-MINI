@@ -19,4 +19,7 @@ void monome_mode_clear_overlay(uint32_t now_ticks);
 uint8_t monome_mode_get_host_led(uint8_t x, uint8_t y);
 void monome_mode_send_key(uint8_t x, uint8_t y, bool pressed);
 void monome_mode_send_tilt(uint8_t sensor, int16_t x, int16_t y, int16_t z);
-void monome_mode_refresh_status_leds(void);
+uint8_t monome_mode_get_palette(void);
+void monome_mode_set_palette(uint8_t palette, uint32_t now_ticks);
+uint8_t monome_mode_get_brightness(void);
+void monome_mode_set_brightness(uint8_t bright_idx, uint32_t now_ticks);

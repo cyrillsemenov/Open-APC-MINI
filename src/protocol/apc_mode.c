@@ -8,6 +8,7 @@
 #include "usb_midi.h"
 
 static uint32_t s_rx_now_ticks = 0;
+static uint8_t s_mode_flags = APC_MODE_FLAGS_DEFAULT;
 static apc_pad_led_mode_t s_host_pad_mode[8][8];
 static uint8_t s_overlay_level[8][8];
 
@@ -64,6 +65,9 @@ static void handle_note_led(uint8_t note, uint8_t vel, bool note_on) {
 }
 
 static void handle_midi_channel_msg(uint8_t status, uint8_t data1, uint8_t data2) {
+    if ((s_mode_flags & APC_MODE_FLAG_MIDI) == 0U) {
+        return;
+    }
     uint8_t type = (uint8_t)(status & 0xF0U);
     uint8_t note = (uint8_t)(data1 & 0x7FU);
     uint8_t vel = (uint8_t)(data2 & 0x7FU);
@@ -76,6 +80,7 @@ static void handle_midi_channel_msg(uint8_t status, uint8_t data1, uint8_t data2
 }
 
 void apc_mode_init(void) {
+    s_mode_flags = APC_MODE_FLAGS_DEFAULT;
     for (uint8_t y = 0; y < 8U; y++) {
         for (uint8_t x = 0; x < 8U; x++) {
             s_host_pad_mode[y][x] = APC_PAD_LED_OFF;
@@ -83,7 +88,41 @@ void apc_mode_init(void) {
         }
     }
     sysex_init();
-    apc_mode_refresh_status_leds();
+}
+
+uint8_t apc_mode_get_flags(void) {
+    if (lua_vm_is_enabled()) {
+        return (uint8_t)(s_mode_flags | APC_MODE_FLAG_LUA);
+    }
+    return (uint8_t)(s_mode_flags & (uint8_t)~APC_MODE_FLAG_LUA);
+}
+
+void apc_mode_set_flags(uint8_t flags, uint32_t now_ticks) {
+    uint8_t next = (uint8_t)(flags & 0x0FU);
+    uint8_t prev = apc_mode_get_flags();
+    s_mode_flags = next;
+
+    if (((prev & APC_MODE_FLAG_MIDI) != 0U) && ((next & APC_MODE_FLAG_MIDI) == 0U)) {
+        for (uint8_t y = 0; y < 8U; y++) {
+            for (uint8_t x = 0; x < 8U; x++) {
+                s_host_pad_mode[y][x] = APC_PAD_LED_OFF;
+                refresh_apc_pad(x, y, now_ticks);
+            }
+            leds_set_round(APC_ROUND_GROUP_TRACK, y, APC_ROUND_LED_OFF);
+            leds_set_round(APC_ROUND_GROUP_SCENE, y, APC_ROUND_LED_OFF);
+        }
+    }
+    if (((prev & APC_MODE_FLAG_SERIALOSC) != 0U) && ((next & APC_MODE_FLAG_SERIALOSC) == 0U)) {
+        for (uint8_t y = 0; y < 8U; y++) {
+            for (uint8_t x = 0; x < 8U; x++) {
+                monome_mode_clear_grid_pad(x, y);
+                refresh_apc_pad(x, y, now_ticks);
+            }
+        }
+    }
+    if (((prev ^ next) & APC_MODE_FLAG_LUA) != 0U) {
+        lua_vm_toggle(now_ticks);
+    }
 }
 
 void apc_mode_set_overlay_led(uint8_t x, uint8_t y, uint8_t level, uint32_t now_ticks) {
@@ -108,11 +147,6 @@ uint8_t apc_mode_get_host_led(uint8_t x, uint8_t y) {
         return 0U;
     }
     return (s_host_pad_mode[y][x] != APC_PAD_LED_OFF) ? 15U : 0U;
-}
-
-void apc_mode_refresh_status_leds(void) {
-    leds_set_round(APC_ROUND_GROUP_SCENE, 2U,
-                   lua_vm_is_enabled() ? APC_ROUND_LED_ON : APC_ROUND_LED_OFF);
 }
 
 void apc_mode_on_button(apc_btn_group_t group, uint8_t index, bool pressed) {
