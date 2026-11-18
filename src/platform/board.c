@@ -149,3 +149,27 @@ uint32_t board_loop_count(void) {
 uint16_t board_max_loop_ticks(void) {
     return s_max_loop_ticks;
 }
+
+#define APC_PWR_CR_REG       (*(volatile uint32_t *)0x40007000UL)
+#define APC_PWR_CR_DBP       (1UL << 8U)
+#define APC_BKP_DR1_REG      (*(volatile uint32_t *)0x40006C04UL)
+#define APC_BKP_MONOME_MAGIC 0x4D4FU
+
+static void bkp_unlock(void) {
+    RCC_APB1ENR |= RCC_APB1ENR_PWREN | RCC_APB1ENR_BKPEN;
+    APC_PWR_CR_REG |= APC_PWR_CR_DBP;
+}
+
+void board_set_post_dfu_monome(bool enable) {
+    bkp_unlock();
+    APC_BKP_DR1_REG = enable ? APC_BKP_MONOME_MAGIC : 0U;
+}
+
+bool board_consume_post_dfu_monome(void) {
+    bkp_unlock();
+    if ((APC_BKP_DR1_REG & 0xFFFFU) == APC_BKP_MONOME_MAGIC) {
+        APC_BKP_DR1_REG = 0U;
+        return true;
+    }
+    return false;
+}

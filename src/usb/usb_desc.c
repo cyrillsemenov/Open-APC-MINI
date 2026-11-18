@@ -287,16 +287,99 @@ static const struct usb_interface_descriptor ftdi_iface_desc[] = {{
     .extralen = 0,
 }};
 
-static const struct usb_interface ftdi_ifaces[] = {{
-    .num_altsetting = 1,
-    .altsetting = ftdi_iface_desc,
+static const struct {
+    struct usb_audio_header_descriptor_head header_head;
+    struct usb_audio_header_descriptor_body header_body;
+} __attribute__((packed)) ftdi_audio_control_functional_descriptors = {
+    .header_head =
+        {
+            .bLength = sizeof(struct usb_audio_header_descriptor_head) +
+                       sizeof(struct usb_audio_header_descriptor_body),
+            .bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
+            .bDescriptorSubtype = USB_AUDIO_TYPE_HEADER,
+            .bcdADC = 0x0100,
+            .wTotalLength = sizeof(struct usb_audio_header_descriptor_head) +
+                            sizeof(struct usb_audio_header_descriptor_body),
+            .binCollection = 1,
+        },
+    .header_body =
+        {
+            .baInterfaceNr = 0x02,
+        },
+};
+
+static const struct usb_interface_descriptor ftdi_audio_control_iface[] = {{
+    .bLength = USB_DT_INTERFACE_SIZE,
+    .bDescriptorType = USB_DT_INTERFACE,
+    .bInterfaceNumber = 1,
+    .bAlternateSetting = 0,
+    .bNumEndpoints = 0,
+    .bInterfaceClass = USB_CLASS_AUDIO,
+    .bInterfaceSubClass = USB_AUDIO_SUBCLASS_CONTROL,
+    .bInterfaceProtocol = 0,
+    .iInterface = 0,
+    .extra = &ftdi_audio_control_functional_descriptors,
+    .extralen = sizeof(ftdi_audio_control_functional_descriptors),
 }};
+
+static const struct usb_endpoint_descriptor ftdi_midi_bulk_endp[] = {
+    {
+        .bLength = USB_DT_ENDPOINT_SIZE,
+        .bDescriptorType = USB_DT_ENDPOINT,
+        .bEndpointAddress = 0x03,
+        .bmAttributes = USB_ENDPOINT_ATTR_BULK,
+        .wMaxPacketSize = 64,
+        .bInterval = 0x00,
+        .extra = &midi_bulk_endp[0],
+        .extralen = sizeof(midi_bulk_endp[0]),
+    },
+    {
+        .bLength = USB_DT_ENDPOINT_SIZE,
+        .bDescriptorType = USB_DT_ENDPOINT,
+        .bEndpointAddress = 0x83,
+        .bmAttributes = USB_ENDPOINT_ATTR_BULK,
+        .wMaxPacketSize = 64,
+        .bInterval = 0x00,
+        .extra = &midi_bulk_endp[1],
+        .extralen = sizeof(midi_bulk_endp[1]),
+    },
+};
+
+static const struct usb_interface_descriptor ftdi_midi_streaming_iface[] = {{
+    .bLength = USB_DT_INTERFACE_SIZE,
+    .bDescriptorType = USB_DT_INTERFACE,
+    .bInterfaceNumber = 2,
+    .bAlternateSetting = 0,
+    .bNumEndpoints = 2,
+    .bInterfaceClass = USB_CLASS_AUDIO,
+    .bInterfaceSubClass = USB_AUDIO_SUBCLASS_MIDISTREAMING,
+    .bInterfaceProtocol = 0,
+    .iInterface = 0,
+    .endpoint = ftdi_midi_bulk_endp,
+    .extra = &midi_streaming_functional_descriptors,
+    .extralen = sizeof(midi_streaming_functional_descriptors),
+}};
+
+static const struct usb_interface ftdi_ifaces[] = {
+    {
+        .num_altsetting = 1,
+        .altsetting = ftdi_iface_desc,
+    },
+    {
+        .num_altsetting = 1,
+        .altsetting = ftdi_audio_control_iface,
+    },
+    {
+        .num_altsetting = 1,
+        .altsetting = ftdi_midi_streaming_iface,
+    },
+};
 
 const struct usb_config_descriptor usb_ftdi_config_desc = {
     .bLength = USB_DT_CONFIGURATION_SIZE,
     .bDescriptorType = USB_DT_CONFIGURATION,
     .wTotalLength = 0,
-    .bNumInterfaces = 1,
+    .bNumInterfaces = 3,
     .bConfigurationValue = 1,
     .iConfiguration = 0,
     .bmAttributes = USB_CONFIG_ATTR_DEFAULT,
@@ -305,7 +388,7 @@ const struct usb_config_descriptor usb_ftdi_config_desc = {
 };
 
 const char *const usb_ftdi_strings[USB_NUM_STRINGS] = {
-    "monome",
-    "monome 64",
+    USB_STRING_VENDOR,
+    USB_STRING_PRODUCT,
     "m1000001",
 };

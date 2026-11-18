@@ -25,11 +25,19 @@ static void refresh_apc_pad(uint8_t x, uint8_t y, uint32_t now_ticks) {
     if (x >= 8U || y >= 8U) {
         return;
     }
-    uint8_t ovl = s_overlay_level[y][x];
-    if (ovl != 0U) {
-        leds_set_pad(y, x, monome_map_level_to_pad_mode(ovl, 0U), now_ticks);
-    } else {
-        leds_set_pad(y, x, s_host_pad_mode[y][x], now_ticks);
+    monome_mode_refresh_pad(x, y, now_ticks);
+}
+
+apc_pad_led_mode_t apc_mode_get_pad_mode(uint8_t x, uint8_t y) {
+    if (x >= 8U || y >= 8U) {
+        return APC_PAD_LED_OFF;
+    }
+    return s_host_pad_mode[y][x];
+}
+
+void apc_mode_clear_pad_mode(uint8_t x, uint8_t y) {
+    if (x < 8U && y < 8U) {
+        s_host_pad_mode[y][x] = APC_PAD_LED_OFF;
     }
 }
 
@@ -42,6 +50,7 @@ static void handle_note_led(uint8_t note, uint8_t vel, bool note_on) {
             mode = (vel < 8U) ? (apc_pad_led_mode_t)vel : APC_PAD_LED_GREEN_SOLID;
         }
         s_host_pad_mode[row][col] = mode;
+        monome_mode_clear_grid_pad(col, row);
         refresh_apc_pad(col, row, s_rx_now_ticks);
     } else if (note >= APC_NOTE_TRACK_BASE && note <= APC_NOTE_TRACK_END) {
         uint8_t idx = (uint8_t)(note - APC_NOTE_TRACK_BASE);

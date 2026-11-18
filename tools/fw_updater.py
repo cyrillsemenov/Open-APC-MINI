@@ -17,6 +17,7 @@ from tools.bin_to_sysex import (
     decode_syx_to_steps,
     encode_firmware_steps,
 )
+from tools.serialosc_osc import serialosc_trigger_dfu
 
 
 def raw_sysex_to_mido(sysex: bytes) -> mido.Message:
@@ -32,16 +33,29 @@ def load_firmware_steps(path: Path) -> list[SysexStep]:
     return encode_firmware_steps(data)
 
 
-def open_apc_midi_ports(port_filter: str, timeout_s: float = 8.0):
+def _match_midi_port(names: list[str], port_filter: str, prefer_bootloader: bool = False) -> str | None:
+    filt = port_filter.lower()
+    if prefer_bootloader:
+        for kw in ("updater", filt, "apc"):
+            m = next((p for p in names if kw in p.lower()), None)
+            if m:
+                return m
+        return None
+    for kw in (filt, "monome", "updater"):
+        m = next((p for p in names if kw in p.lower()), None)
+        if m:
+            return m
+    return None
+
+
+def open_apc_midi_ports(port_filter: str, timeout_s: float = 8.0, prefer_bootloader: bool = False):
     """Waits for and opens matching system MIDI IN and OUT ports."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         out_names = mido.get_output_names()
         in_names = mido.get_input_names()
-        out_match = next(
-            (p for p in out_names if port_filter.lower() in p.lower()), None
-        )
-        in_match = next((p for p in in_names if port_filter.lower() in p.lower()), None)
+        out_match = _match_midi_port(out_names, port_filter, prefer_bootloader)
+        in_match = _match_midi_port(in_names, port_filter, prefer_bootloader)
         if out_match and in_match:
             out_port = mido.open_output(out_match)
             in_port = mido.open_input(in_match)
@@ -80,7 +94,9 @@ def send_and_wait_ack(
 
 
 def try_serial_dfu_unlock() -> bool:
-    """If the APC Mini is currently in Monome FTDI mode (/dev/cu.usbserial-m*), send raw DFU unlock."""
+    """If the APC Mini is currently in Monome FTDI mode, send DFU unlock via serialoscd OSC or raw serial."""
+    if serialosc_trigger_dfu():
+        return True
     serial_ports = sorted(glob.glob("/dev/cu.usbserial-m*") + glob.glob("/dev/ttyUSB*"))
     for sp in serial_ports:
         try:
@@ -98,12 +114,12 @@ def try_serial_dfu_unlock() -> bool:
 
 
 def enter_and_unlock_bootloader(port_filter: str):
-    """Unlocks via system MIDI from either the running App (0x15), Monome FTDI serial, or Bootloader (0x3E)."""
+    """Unlocks via system MIDI from either the running App (0x15), Monome FTDI/OSC, or Bootloader (0x3E)."""
     try:
         out_port, in_port = open_apc_midi_ports(port_filter, timeout_s=1.5)
     except RuntimeError:
         try_serial_dfu_unlock()
-        out_port, in_port = open_apc_midi_ports(port_filter, timeout_s=8.0)
+        out_port, in_port = open_apc_midi_ports(port_filter, timeout_s=8.0, prefer_bootloader=True)
     unlock_msg = raw_sysex_to_mido(UNLOCK_SYSEX)
     code = send_and_wait_ack(out_port, in_port, unlock_msg)
 
@@ -113,7 +129,7 @@ def enter_and_unlock_bootloader(port_filter: str):
 
     if code == ACK_APP_UNLOCK:
         print(
-            "Application accepted unlock (ACK 0x15). Please power-cycle USB if it doesn't auto-reset..."
+            "Application accepted unlock (ACK 0x15). Waiting for USB-MIDI bootloader re-enumeration..."
         )
         out_port.close()
         in_port.close()
@@ -123,7 +139,9 @@ def enter_and_unlock_bootloader(port_filter: str):
         deadline = time.monotonic() + 15.0
         while time.monotonic() < deadline:
             try:
-                out_port, in_port = open_apc_midi_ports(port_filter, timeout_s=2.0)
+                out_port, in_port = open_apc_midi_ports(
+                    port_filter, timeout_s=2.0, prefer_bootloader=True
+                )
                 code = send_and_wait_ack(out_port, in_port, unlock_msg, timeout_s=1.5)
                 if code == ACK_BL_UNLOCK:
                     print("Bootloader unlocked (ACK 0x3E).")

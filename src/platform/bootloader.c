@@ -120,6 +120,8 @@ bool bootloader_clear_crash_log(void) {
 }
 
 void bootloader_enter_dfu(void) {
+    board_set_post_dfu_monome(usb_get_profile() == USB_PROFILE_MONOME_FTDI);
+
     // Blank all 8x8 TM1629 pad LEDs and 16 round LEDs before rebooting into DFU
     leds_init();
 
@@ -195,9 +197,13 @@ void bootloader_check_unlock_packet(const uint8_t pkt[64]) {
     ack[3] = MIDI_STATUS_SYSEX_END;
     usb_midi_ep1_write(ack, sizeof(ack));
 
-    // Wait for USB host to read EP1 IN ACK (STAT_TX leaves USB_EP_TX_STAT_VALID)
+    // Wait for USB host to read EP1 IN (or EP3 IN in composite Monome mode) ACK
     for (volatile uint32_t d = 0; d < 400000; d++) {
         if ((*USB_EP_REG(USB_EP1) & USB_EP_TX_STAT) != USB_EP_TX_STAT_VALID) {
+            break;
+        }
+        if (usb_get_profile() == USB_PROFILE_MONOME_FTDI &&
+            (*USB_EP_REG(USB_EP3) & USB_EP_TX_STAT) != USB_EP_TX_STAT_VALID) {
             break;
         }
     }

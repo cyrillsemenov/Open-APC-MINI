@@ -136,12 +136,11 @@ static void emit_grid_key_event(uint8_t x, uint8_t y, bool pressed) {
     }
     if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
         monome_mode_send_key(x, y, pressed);
-    } else {
-        uint8_t note = (uint8_t)((7U - y) * 8U + x);
-        uint8_t cin = pressed ? USB_MIDI_CIN_NOTE_ON : USB_MIDI_CIN_NOTE_OFF;
-        uint8_t st = pressed ? MIDI_STATUS_NOTE_ON : MIDI_STATUS_NOTE_OFF;
-        usb_midi_send_event(cin, st, note, pressed ? APC_DEFAULT_VELOCITY : 0U);
     }
+    uint8_t note = (uint8_t)((7U - y) * 8U + x);
+    uint8_t cin = pressed ? USB_MIDI_CIN_NOTE_ON : USB_MIDI_CIN_NOTE_OFF;
+    uint8_t st = pressed ? MIDI_STATUS_NOTE_ON : MIDI_STATUS_NOTE_OFF;
+    usb_midi_send_event(cin, st, note, pressed ? APC_DEFAULT_VELOCITY : 0U);
 }
 
 static void flush_all_gates(void) {
@@ -252,10 +251,8 @@ static int32_t call_builtin(lua_coro_t *c, uint8_t fn_id, uint8_t argc, const in
         uint8_t vel = (uint8_t)(args[2] & 0x7FU);
         if (usb_get_profile() == USB_PROFILE_MONOME_FTDI && note < 64U) {
             monome_mode_send_key((uint8_t)(note & 7U), (uint8_t)(7U - (note >> 3U)), vel > 0U);
-        } else {
-            usb_midi_send_event(USB_MIDI_CIN_NOTE_ON, (uint8_t)(MIDI_STATUS_NOTE_ON | ch), note,
-                                vel);
         }
+        usb_midi_send_event(USB_MIDI_CIN_NOTE_ON, (uint8_t)(MIDI_STATUS_NOTE_ON | ch), note, vel);
         return 0;
     }
 
@@ -264,10 +261,8 @@ static int32_t call_builtin(lua_coro_t *c, uint8_t fn_id, uint8_t argc, const in
         uint8_t note = (uint8_t)(args[1] & 0x7FU);
         if (usb_get_profile() == USB_PROFILE_MONOME_FTDI && note < 64U) {
             monome_mode_send_key((uint8_t)(note & 7U), (uint8_t)(7U - (note >> 3U)), false);
-        } else {
-            usb_midi_send_event(USB_MIDI_CIN_NOTE_OFF, (uint8_t)(MIDI_STATUS_NOTE_OFF | ch), note,
-                                0U);
         }
+        usb_midi_send_event(USB_MIDI_CIN_NOTE_OFF, (uint8_t)(MIDI_STATUS_NOTE_OFF | ch), note, 0U);
         return 0;
     }
 

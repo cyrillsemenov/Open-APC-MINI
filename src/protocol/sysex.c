@@ -1,18 +1,22 @@
 #include "apc_config.h"
+#include "apc_mode.h"
 #include "apc_protocol.h"
 #include "board.h"
 #include "bootloader.h"
 #include "buttons.h"
 #include "faders.h"
+#include "leds.h"
 #include "lua_vm.h"
+#include "monome_mode.h"
 #include "sysex.h"
 #include "usb_midi.h"
 
-#define DIAG_SYSEX_SUB_TELEMETRY  0x01U
-#define DIAG_SYSEX_SUB_CRASH_GET  0x02U
-#define DIAG_SYSEX_SUB_CRASH_CLR  0x03U
-#define DIAG_SYSEX_SUB_PEEK_MEM   0x04U
-#define DIAG_SYSEX_SUB_TEST_FAULT 0x05U
+#define DIAG_SYSEX_SUB_TELEMETRY   0x01U
+#define DIAG_SYSEX_SUB_CRASH_GET   0x02U
+#define DIAG_SYSEX_SUB_CRASH_CLR   0x03U
+#define DIAG_SYSEX_SUB_PEEK_MEM    0x04U
+#define DIAG_SYSEX_SUB_TEST_FAULT  0x05U
+#define DIAG_SYSEX_SUB_SET_PROFILE 0x06U
 
 static uint8_t s_sysex_dev_id = 0;
 static uint8_t s_serial_buf[16];
@@ -105,6 +109,19 @@ static void handle_diag_sysex(const uint8_t *msg, uint16_t len) {
         // Deliberately execute an undefined Thumb instruction (UDF #0) to test
         // hardware exception stacking -> 0x08007800 crash log -> DFU recovery.
         __asm__ volatile(".short 0xde00");
+    }
+
+    if (subcmd == DIAG_SYSEX_SUB_SET_PROFILE && len == 8U) {
+        uint32_t now = board_ticks();
+        if (msg[6] != 0U) {
+            monome_mode_init(now);
+            usb_switch_profile(USB_PROFILE_MONOME_FTDI);
+        } else {
+            leds_all_off(now);
+            leds_set_brightness(7U, now);
+            apc_mode_init();
+            usb_switch_profile(USB_PROFILE_APC_MIDI);
+        }
     }
 }
 

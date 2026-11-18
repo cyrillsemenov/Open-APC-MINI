@@ -575,6 +575,19 @@ class STM32F102Harness:
             out.append(pkt)
         return out
 
+    def usb_poll_midi_in(self) -> list[bytes]:
+        pkt1 = self._harvest_ep_tx(1)
+        if pkt1 is not None:
+            self.usb_epr[1] |= 0x0080
+            self.call_isr(VEC_USB_LP_IRQ)
+        out: list[bytes] = []
+        pkt3 = self._harvest_ep_tx(3)
+        if pkt3 is not None:
+            self.usb_epr[3] |= 0x0080
+            self.call_isr(VEC_USB_LP_IRQ)
+            out.append(pkt3)
+        return out
+
 
 def extract_usb_midi_sysex(packets: list[bytes]) -> bytes:
     """Reassembles MIDI SysEx bytes from 4-byte USB-MIDI Event Packets."""
@@ -703,7 +716,7 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
     # 4. Universal Device Inquiry (F0 7E 7F 06 01 F7 -> Identity Reply)
     mcu.usb_ep1_out(bytes([0x04, 0xF0, 0x7E, 0x7F, 0x07, 0x06, 0x01, 0xF7]))
     mcu.run_steps(25_000)
-    id_sysex = extract_usb_midi_sysex(mcu.usb_poll_ep1_in())
+    id_sysex = extract_usb_midi_sysex(mcu.usb_poll_midi_in())
     check(
         len(id_sysex) == 35
         and id_sysex[:7] == bytes([0xF0, 0x7E, 0x7F, 0x06, 0x02, 0x47, 0x28])
@@ -736,7 +749,7 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         )
     )
     mcu.run_steps(25_000)
-    dump_sysex = extract_usb_midi_sysex(mcu.usb_poll_ep1_in())
+    dump_sysex = extract_usb_midi_sysex(mcu.usb_poll_midi_in())
     check(
         len(dump_sysex) == 18
         and dump_sysex[:7] == bytes([0xF0, 0x47, 0x00, 0x28, 0x61, 0x00, 0x09])
@@ -751,7 +764,7 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         for _ in range(8):
             mcu.call_isr(VEC_SYSTICK)
         mcu.run_steps(15_000)
-    mcu.usb_poll_ep1_in()
+    mcu.usb_poll_midi_in()
 
     # Press Grid Pad (col=0, row=0 -> MIDI note 0x38) and Shift (col=10, row=0 -> MIDI note 0x62)
     mcu.pressed_buttons = {(0, 0), (10, 0)}
@@ -760,7 +773,7 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         for _ in range(8):
             mcu.call_isr(VEC_SYSTICK)
         mcu.run_steps(15_000)
-        rx_events.extend(mcu.usb_poll_ep1_in())
+        rx_events.extend(mcu.usb_poll_midi_in())
 
     midi_words = [
         pkt[i : i + 4]
@@ -784,7 +797,7 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         for _ in range(8):
             mcu.call_isr(VEC_SYSTICK)
         mcu.run_steps(15_000)
-        rx_events.extend(mcu.usb_poll_ep1_in())
+        rx_events.extend(mcu.usb_poll_midi_in())
 
     midi_words = [
         pkt[i : i + 4]
@@ -811,7 +824,7 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         mcu.fader_adc[8] = min(2048, i * 26)
         mcu._run_adc1_dma()
         mcu.run_steps(10_000)
-        cc_events.extend(mcu.usb_poll_ep1_in())
+        cc_events.extend(mcu.usb_poll_midi_in())
 
     cc_map = {
         pkt[i + 2]: pkt[i + 3]
@@ -831,7 +844,7 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         mcu.fader_adc[0] = sample
         mcu._run_adc1_dma()
         mcu.run_steps(10_000)
-        spike_events.extend(mcu.usb_poll_ep1_in())
+        spike_events.extend(mcu.usb_poll_midi_in())
 
     spurious_f0 = [
         pkt[i + 3]
@@ -849,7 +862,7 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         mcu.fader_adc[0] = 4035
         mcu._run_adc1_dma()
         mcu.run_steps(10_000)
-        step_down_events.extend(mcu.usb_poll_ep1_in())
+        step_down_events.extend(mcu.usb_poll_midi_in())
 
     step_down_f0 = [
         pkt[i + 3]
@@ -905,7 +918,7 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
     diag_pkts: list[bytes] = []
     for _ in range(8):
         mcu.run_steps(20_000)
-        diag_pkts.extend(mcu.usb_poll_ep1_in())
+        diag_pkts.extend(mcu.usb_poll_midi_in())
     diag_sysex = extract_usb_midi_sysex(diag_pkts)
     subcmd, telem_bytes = decode_diag_nibbles(diag_sysex)
     check(
@@ -918,26 +931,7 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         f"Unexpected telemetry values: flash_kb={flash_kb}, idcode=0x{idcode:08X}, loops={loop_cnt}",
     )
 
-    # 10. Runtime Switch to Monome serialosc (FTDI 0403:6001) & mext Protocol
-    falls_before = mcu.pa8_falls
-    # Hold Shift (col=10, row=0) + Scene 2 (col=9, row=1) across debounce scans
-    mcu.pressed_buttons = {(10, 0), (9, 1)}
-    for _ in range(6):
-        for _ in range(8):
-            mcu.call_isr(VEC_SYSTICK)
-        mcu.run_steps(150_000)
-    mcu.pressed_buttons.clear()
-    for _ in range(6):
-        for _ in range(8):
-            mcu.call_isr(VEC_SYSTICK)
-        mcu.run_steps(20_000)
-
-    check(
-        mcu.pa8_falls > falls_before and (mcu.gpio_odr[0] & (1 << 8)) != 0,
-        "Runtime profile switch did not pulse PA8 LOW -> HIGH for USB re-enumeration",
-    )
-
-    mcu.usb_reset()
+    # 10. Simultaneous Monome serialosc (FTDI 0403:6001) & APC MINI USB-MIDI Composite Verification
     ftdi_desc = mcu.usb_ep0_setup(
         bytes([0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x12, 0x00]), expect_in=True
     )
@@ -947,10 +941,6 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         f"Expected FTDI VID:PID 0403:6001 in Monome mode, got {f_vid:04X}:{f_pid:04X}",
     )
 
-    # Set configuration 1 & verify FTDI vendor control requests (SIO_GET_MODEM_STATUS = 0x05)
-    mcu.usb_ep0_setup(
-        bytes([0x00, 0x09, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]), expect_in=False
-    )
     modem_stat = mcu.usb_ep0_setup(
         bytes([0xC0, 0x05, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00]), expect_in=True
     )
@@ -962,9 +952,33 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         (mcu.usb_epr[2] & 0x3000) == 0x3000,
         "FTDI EP2 Bulk OUT not armed after SET_CONFIGURATION",
     )
+    check(
+        (mcu.usb_epr[3] & 0x3000) == 0x3000,
+        "Composite USB-MIDI EP3 Bulk OUT not armed in Monome mode",
+    )
+
+    # Verify composite USB-MIDI interface (EP3 OUT/IN) responds to Universal Device Inquiry while in Monome mode
+    mcu.usb_ep_out(3, bytes([0x04, 0xF0, 0x7E, 0x7F, 0x07, 0x06, 0x01, 0xF7]))
+    ep3_pkts: list[bytes] = []
+    for _ in range(4):
+        mcu.run_steps(15_000)
+        p3 = mcu._harvest_ep_tx(3)
+        if p3 is not None:
+            mcu.usb_epr[3] |= 0x0080
+            mcu.call_isr(VEC_USB_LP_IRQ)
+            ep3_pkts.append(p3)
+    ep3_id = extract_usb_midi_sysex(ep3_pkts)
+    check(
+        len(ep3_id) == 35 and ep3_id[:6] == bytes([0xF0, 0x7E, 0x7F, 0x06, 0x02, 0x47]),
+        f"Composite USB-MIDI EP3 did not return Identity Reply in Monome mode: {ep3_id.hex(' ')}",
+    )
+
+    # Drain any FTDI serialosc packets emitted during Stages 6-7 button/fader tests
+    for _ in range(8):
+        mcu.run_steps(10_000)
+        mcu.usb_poll_ep1_in()
 
     # Send mext /sys/id (0x01) and /sys/size (0x03) on EP2 OUT
-    mcu.usb_poll_ep1_in()
     mcu.usb_ep_out(2, bytes([0x01, 0x03]))
     mcu.run_steps(30_000)
     ftdi_in = mcu.usb_poll_ep1_in()
@@ -976,7 +990,7 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
     check(
         len(mext_stream) == 36
         and mext_stream[0] == 0x01
-        and mext_stream[1:9] == b"m1000001"
+        and mext_stream[1:9] == b"APC MINI"
         and mext_stream[33:36] == b"\x02\x08\x08",
         f"Bad mext /sys/id + /sys/size reply ({len(mext_stream)} B): {mext_stream.hex(' ')}",
     )
@@ -1147,6 +1161,11 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
     check(
         mcu.tm_display == b"\x00" * 16,
         f"TM1629 display RAM was not cleared to all-zero before DFU reboot: {mcu.tm_display}",
+    )
+    bkp_dr1 = struct.unpack("<H", mcu.uc.mem_read(0x40006C04, 2))[0]
+    check(
+        bkp_dr1 == 0x4D4F,
+        f"BKP_DR1 (0x40006C04) did not save Monome resume magic 0x4D4F before DFU reset: 0x{bkp_dr1:04X}",
     )
     check(mcu.reset_requested, "SCB->AIRCR SYSRESETREQ was not triggered")
     ok(
