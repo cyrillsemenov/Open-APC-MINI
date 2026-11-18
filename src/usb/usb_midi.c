@@ -11,8 +11,8 @@
 #include "usb_midi.h"
 
 #define USB_MIDI_TX_RING_LEN 128U // 128 x 4B = 512 B
-#define USB_MIDI_RX_RING_LEN 64U  // 64 x 4B  = 256 B
-#define USB_MIDI_SYSEX_MAX   64U  // Max assembled SysEx length (largest APC msg is 24 B)
+#define USB_MIDI_RX_RING_LEN 128U // 128 x 4B = 512 B
+#define USB_MIDI_SYSEX_MAX   64U  // Max assembled SysEx length
 
 #define USB_SER_TX_RING_LEN 256U // 256 B FTDI TX byte ring
 #define USB_SER_RX_RING_LEN 256U // 256 B FTDI RX byte ring

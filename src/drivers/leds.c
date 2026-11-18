@@ -117,6 +117,9 @@ void leds_set_pad(uint8_t row, uint8_t col, apc_pad_led_mode_t mode, uint32_t no
     if (mode > APC_PAD_LED_GREEN_SOLID) {
         mode = APC_PAD_LED_GREEN_SOLID;
     }
+    if (s_pad_mode[row][col] == (uint8_t)mode) {
+        return;
+    }
 
     s_pad_mode[row][col] = (uint8_t)mode;
 

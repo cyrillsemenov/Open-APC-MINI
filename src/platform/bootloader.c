@@ -75,39 +75,48 @@ static bool write_bootloader_magic_page(uint32_t page_addr) {
     return true;
 }
 
-static void write_crash_log_page(const apc_crash_log_t *log) {
-    uint32_t page_addr = (uint32_t)(uintptr_t)_crash_log_page;
-    if ((page_addr & 0x3FFUL) != 0) {
-        return;
-    }
-
-    flash_unlock();
-    flash_clear_status_flags();
-    flash_erase_page(page_addr);
-
-    if ((FLASH_SR & (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) == 0) {
-        const uint32_t *words = (const uint32_t *)log;
-        uint32_t count = (uint32_t)(sizeof(apc_crash_log_t) / sizeof(uint32_t));
-        for (uint32_t i = 0; i < count; i++) {
-            flash_program_word(page_addr + (i * 4UL), words[i]);
-            for (volatile uint32_t d = 0; d < 20; d++) {}
-        }
-    }
-    flash_lock();
-}
-
-bool bootloader_clear_crash_log(void) {
-    uint32_t page_addr = (uint32_t)(uintptr_t)_crash_log_page;
-    if ((page_addr & 0x3FFUL) != 0) {
+bool bootloader_write_flash_page(uint32_t page_addr, const uint8_t *data, uint16_t len) {
+    if (page_addr < 0x08007800UL || page_addr == (uint32_t)(uintptr_t)_boot_magic_page ||
+        (page_addr & 0x3FFUL) != 0 || len > 1024U) {
         return false;
     }
 
     flash_unlock();
     flash_clear_status_flags();
     flash_erase_page(page_addr);
-    bool ok = (FLASH_SR & (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) == 0;
+
+    if ((FLASH_SR & (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) != 0) {
+        flash_lock();
+        return false;
+    }
+
+    if (data != 0 && len > 0U) {
+        uint16_t words = (uint16_t)((len + 3U) >> 2U);
+        for (uint16_t i = 0; i < words; i++) {
+            uint16_t base = (uint16_t)(i << 2U);
+            uint32_t word = 0xFFFFFFFFUL;
+            uint8_t *wb = (uint8_t *)&word;
+            for (uint8_t b = 0; b < 4U; b++) {
+                if ((uint16_t)(base + b) < len) {
+                    wb[b] = data[base + b];
+                }
+            }
+            uint32_t addr = page_addr + (uint32_t)base;
+            flash_program_word(addr, word);
+            for (volatile uint32_t d = 0; d < 20; d++) {}
+            if (*(const volatile uint32_t *)addr != word) {
+                flash_lock();
+                return false;
+            }
+        }
+    }
+
     flash_lock();
-    return ok;
+    return true;
+}
+
+bool bootloader_clear_crash_log(void) {
+    return bootloader_write_flash_page((uint32_t)(uintptr_t)_crash_log_page, 0, 0U);
 }
 
 void bootloader_enter_dfu(void) {
@@ -151,7 +160,8 @@ void bootloader_fault_dfu(uint32_t fault_msp, uint32_t ipsr) {
         log.pc = frame[6];
     }
 
-    write_crash_log_page(&log);
+    bootloader_write_flash_page((uint32_t)(uintptr_t)_crash_log_page, (const uint8_t *)&log,
+                                (uint16_t)sizeof(apc_crash_log_t));
     bootloader_enter_dfu();
 }
 

@@ -9,6 +9,9 @@ extern uint8_t _boot_magic_page[];
 // Provided by the linker script at 0x08007800 (1 KB persistent post-mortem crash log page).
 extern uint8_t _crash_log_page[];
 
+// Provided by the linker script at 0x08008000 (1 KB persistent Lua bytecode page).
+extern uint8_t _lua_flash_page[];
+
 // Dedicated 256-byte fault recovery stack in low SRAM (.bss) so resetting MSP
 // in a fault handler never overwrites the pre-fault exception frame on the main stack.
 extern uint32_t g_fault_stack[64];
@@ -42,3 +45,6 @@ void bootloader_fault_dfu(uint32_t fault_msp, uint32_t ipsr);
 
 // Erases the persistent post-mortem crash dump page at 0x08007800.
 bool bootloader_clear_crash_log(void);
+
+// Erases and writes up to 1024 bytes to a non-app 1 KB Flash page (>= 0x08007800).
+bool bootloader_write_flash_page(uint32_t page_addr, const uint8_t *data, uint16_t len);
