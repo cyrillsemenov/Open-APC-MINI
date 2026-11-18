@@ -56,8 +56,8 @@ static uint8_t s_grid_level[8][8];    // 0 = off, 1..15 = varibright, 16 = 1-bit
 static uint8_t s_overlay_level[8][8]; // Lua Co-Processor overlay (0 = transparent)
 static uint8_t s_palette = 0;         // 0..3 color palettes
 static uint8_t s_bright_idx = 3;      // 0..3 -> TM1629 brightness 0, 1, 2, 7
-static uint8_t s_tilt_mask = 0x01U;
-static uint8_t s_fader_vals[APC_FADER_COUNT];
+static uint8_t s_tilt_mask = 0x07U;   // Enable all 3 tilt banks (Faders 1..9) by default
+static uint16_t s_fader_vals[APC_FADER_COUNT];
 
 static uint8_t s_rx_cmd = 0;
 static uint8_t s_rx_need = 0;
@@ -436,7 +436,7 @@ void monome_mode_init(uint32_t now_ticks) {
     }
     s_palette = 0U;
     s_bright_idx = 3U;
-    s_tilt_mask = 0x01U;
+    s_tilt_mask = 0x07U;
     s_rx_cmd = 0U;
     s_rx_need = 0U;
     s_rx_pos = 0U;
@@ -512,11 +512,11 @@ void monome_mode_on_button(apc_btn_group_t group, uint8_t index, bool pressed, u
     }
 }
 
-void monome_mode_on_fader(uint8_t fader_idx, uint8_t value) {
+void monome_mode_on_fader(uint8_t fader_idx, uint16_t hires_value) {
     if (fader_idx >= APC_FADER_COUNT) {
         return;
     }
-    s_fader_vals[fader_idx] = value;
+    s_fader_vals[fader_idx] = hires_value;
 
     uint8_t sensor = (uint8_t)(fader_idx / 3U);
     if ((s_tilt_mask & (1U << sensor)) == 0U) {
@@ -524,9 +524,9 @@ void monome_mode_on_fader(uint8_t fader_idx, uint8_t value) {
     }
 
     uint8_t base = (uint8_t)(sensor * 3U);
-    int16_t x = (int16_t)((uint16_t)s_fader_vals[base + 0U] << 7U);
-    int16_t y = (int16_t)((uint16_t)s_fader_vals[base + 1U] << 7U);
-    int16_t z = (int16_t)((uint16_t)s_fader_vals[base + 2U] << 7U);
+    int16_t x = (int16_t)s_fader_vals[base + 0U];
+    int16_t y = (int16_t)s_fader_vals[base + 1U];
+    int16_t z = (int16_t)s_fader_vals[base + 2U];
     monome_mode_send_tilt(sensor, x, y, z);
 }
 

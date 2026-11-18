@@ -25,14 +25,14 @@ static void app_on_button(apc_btn_group_t group, uint8_t index, bool pressed) {
     }
 }
 
-static void app_on_fader(uint8_t fader_idx, uint8_t value) {
-    lua_vm_on_fader(fader_idx, value, s_loop_now);
+static void app_on_fader(uint8_t fader_idx, uint8_t cc_val, uint16_t hires_val, bool cc_changed) {
+    lua_vm_on_fader(fader_idx, cc_val, hires_val, s_loop_now);
     uint8_t flags = apc_mode_get_flags();
     if ((flags & APC_MODE_FLAG_SERIALOSC) != 0U) {
-        monome_mode_on_fader(fader_idx, value);
+        monome_mode_on_fader(fader_idx, hires_val);
     }
-    if ((flags & APC_MODE_FLAG_MIDI) != 0U) {
-        apc_mode_on_fader(fader_idx, value);
+    if (cc_changed && (flags & APC_MODE_FLAG_MIDI) != 0U) {
+        apc_mode_on_fader(fader_idx, cc_val);
     }
 }
 

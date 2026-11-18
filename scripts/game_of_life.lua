@@ -28,9 +28,9 @@ function on_grid(x, y, z)
     return 0
 end
 
-function on_fader(idx, val)
+function on_fader(idx, val, hires)
     if idx == 8 then
-        set_tempo(40 + (127 - val))
+        set_tempo(40 + ((16383 - hires) >> 7))
     end
 end
 
