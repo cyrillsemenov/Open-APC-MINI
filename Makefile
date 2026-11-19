@@ -129,7 +129,7 @@ OBJS := $(patsubst src/%.c,$(BUILD_DIR)/obj/%.o,$(APP_SRCS))
 WEB_DIST_DIR  := $(BUILD_DIR)/web
 WEB_PORT      ?= 8000
 
-.PHONY: all sysex verify validate test-validator flash web-dist serve-web disasm clean clean-all
+.PHONY: all sysex verify validate test-validator flash lua-wasm web-dist serve-web disasm clean clean-all
 
 ifeq ($(BOOTLOADER),0)
 all: $(STANDALONE_BIN)
@@ -174,7 +174,15 @@ flash: $(APP_SYX)
 debug:
 	$(UV) run fw_debug
 
-web-dist: $(APP_BIN) $(APP_SYX) $(wildcard web/*) tools/build_web_manifest.py
+lua-wasm:
+	@if command -v cargo >/dev/null 2>&1 && rustup target list --installed 2>/dev/null | grep -q wasm32-unknown-unknown; then \
+		cargo build --manifest-path tools/lua_wasm/Cargo.toml --target wasm32-unknown-unknown --release && \
+		cp tools/lua_wasm/target/wasm32-unknown-unknown/release/apc_lua_compiler.wasm web/apc_lua_compiler.wasm; \
+	else \
+		echo "[WASM] Using prebuilt web/apc_lua_compiler.wasm"; \
+	fi
+
+web-dist: $(APP_BIN) $(APP_SYX) lua-wasm $(wildcard web/*) $(wildcard scripts/*.lua) tools/build_web_manifest.py
 	$(UV) run build_web_manifest --web-src web --out-dir $(WEB_DIST_DIR) --bin $(APP_BIN) --syx $(APP_SYX) --elf $(APP_ELF)
 
 serve-web: web-dist

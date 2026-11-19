@@ -229,6 +229,42 @@ def fetch_github_releases(out_dir: Path, repo: str | None = None) -> list[dict[s
     return staged
 
 
+def stage_lua_scripts(out_dir: Path, scripts_src: Path = Path("scripts")) -> None:
+    """Copies scripts/*.lua into out_dir/scripts/ and writes scripts/manifest.json."""
+    if not scripts_src.is_dir():
+        return
+    dest_dir = out_dir / "scripts"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    descriptions = {
+        "bouncing_balls.lua": "bouncing_balls.lua — Polyrhythmic Bouncing Ball Sequencer (14-bit Fader Tempo)",
+        "game_of_life.lua": "game_of_life.lua — Conway's Game of Life Generative Sequencer",
+        "bouncy_echo.lua": "bouncy_echo.lua — Built-in ROM Varibright Diamond Ripple & Echo",
+    }
+
+    entries: list[dict[str, str]] = []
+    for lua_file in sorted(scripts_src.glob("*.lua")):
+        shutil.copy2(lua_file, dest_dir / lua_file.name)
+        entries.append(
+            {
+                "id": lua_file.name,
+                "label": descriptions.get(lua_file.name, lua_file.name),
+                "url": f"scripts/{lua_file.name}",
+            }
+        )
+
+    manifest = {
+        "default_script": "bouncing_balls.lua"
+        if any(e["id"] == "bouncing_balls.lua" for e in entries)
+        else (entries[0]["id"] if entries else ""),
+        "scripts": entries,
+    }
+    (dest_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
+    )
+    print(f"[WEB] Staged {len(entries)} Lua preset script(s) in {dest_dir}")
+
+
 def build_web_bundle(
     web_src: Path,
     out_dir: Path,
@@ -246,6 +282,8 @@ def build_web_bundle(
             shutil.copytree(item, dest, dirs_exist_ok=True)
         else:
             shutil.copy2(item, dest)
+
+    stage_lua_scripts(out_dir)
 
     versions: list[dict[str, Any]] = []
     if fetch_releases:

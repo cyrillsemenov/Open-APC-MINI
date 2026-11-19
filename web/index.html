@@ -4,7 +4,7 @@
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>APC Mini — WebMIDI Firmware Updater</title>
-        <link href="style.css?v=20261118b" rel="stylesheet" />
+        <link href="style.css?v=20261119a" rel="stylesheet" />
     </head>
     <body>
         <div class="container">
@@ -164,11 +164,101 @@
                 </div>
             </section>
 
-            <!-- 4. Live Diagnostics, Post-Mortem Crash Log & Memory Peek -->
+            <!-- 4. On-Chip Lua Co-Processor Studio (Rust + full_moon WASM) -->
+            <section class="card">
+                <div class="card-title">
+                    <span>4. On-Chip Lua Co-Processor Studio</span>
+                    <span
+                        id="luaWasmBadge"
+                        style="font-family: var(--mono); font-size: 0.78rem"
+                        >Loading Rust/WASM compiler...</span
+                    >
+                </div>
+
+                <div>
+                    <label for="luaPresetSelect"
+                        >Preset Script or Local .lua File</label
+                    >
+                    <select id="luaPresetSelect">
+                        <option value="bouncing_balls.lua">
+                            bouncing_balls.lua — Polyrhythmic Bouncing Ball Sequencer (14-bit Fader Tempo)
+                        </option>
+                        <option value="game_of_life.lua">
+                            game_of_life.lua — Conway's Game of Life Generative Sequencer
+                        </option>
+                        <option value="bouncy_echo.lua">
+                            bouncy_echo.lua — Built-in ROM Varibright Diamond Ripple &amp; Echo
+                        </option>
+                        <option value="__custom__">
+                            Custom / Edited Script...
+                        </option>
+                    </select>
+                </div>
+
+                <input
+                    type="file"
+                    id="luaFileInput"
+                    accept=".lua"
+                    class="hidden"
+                />
+
+                <textarea
+                    id="luaEditor"
+                    class="lua-editor"
+                    spellcheck="false"
+                    placeholder="-- Write Lua 5.4 code for the APC Mini on-chip co-processor (init, on_tick, on_grid, on_fader)..."
+                ></textarea>
+
+                <div id="luaErrorBox" class="lua-error-box hidden"></div>
+
+                <table class="meta-table" id="luaMetaGrid">
+                    <thead>
+                        <tr>
+                            <th>Compiler Status</th>
+                            <th>Image Size (Limit 768 B)</th>
+                            <th>Entry Offsets (init / tick / grid / fader)</th>
+                            <th>SysEx Frames</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong id="luaMetaStatus">—</strong></td>
+                            <td><strong id="luaMetaSize">—</strong></td>
+                            <td><strong id="luaMetaEntries">—</strong></td>
+                            <td><strong id="luaMetaFrames">—</strong></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="btn-row">
+                    <button
+                        id="btnLuaUploadRam"
+                        class="primary"
+                        type="button"
+                        disabled
+                    >
+                        Upload &amp; Run in RAM (Live)
+                    </button>
+                    <button id="btnLuaSaveFlash" type="button" disabled>
+                        Upload &amp; Save to Flash (0x08008000)
+                    </button>
+                    <button id="btnLuaResetRom" type="button" disabled>
+                        Reset to Built-in ROM Script
+                    </button>
+                    <button id="btnLuaLoadFile" type="button">
+                        Load .lua File...
+                    </button>
+                    <button id="btnLuaDownloadLuac" type="button" disabled>
+                        Download .luac
+                    </button>
+                </div>
+            </section>
+
+            <!-- 5. Live Diagnostics, Post-Mortem Crash Log & Memory Peek -->
             <section class="card">
                 <div class="card-title">
                     <span
-                        >4. Device Diagnostics &amp; Post-Mortem Black-Box</span
+                        >5. Device Diagnostics &amp; Post-Mortem Black-Box</span
                     >
                     <span
                         id="diagStatusLabel"
@@ -374,6 +464,6 @@
             </section>
         </div>
 
-        <script type="module" src="updater.js?v=20261118g"></script>
+        <script type="module" src="updater.js?v=20261119a"></script>
     </body>
 </html>

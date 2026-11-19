@@ -74,6 +74,7 @@ jobs:
             --out-dir build/web \
             --bin build/apc_mini_app.bin \
             --syx build/apc_mini_app.syx \
+            --elf build/apc_mini_app.elf \
             --fetch-releases
 
       - name: Configure GitHub Pages

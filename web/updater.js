@@ -372,6 +372,20 @@ const ui = {
   peekAddrInput: document.getElementById("peekAddrInput"),
   btnPeekMem: document.getElementById("btnPeekMem"),
   peekPre: document.getElementById("peekPre"),
+  luaWasmBadge: document.getElementById("luaWasmBadge"),
+  luaPresetSelect: document.getElementById("luaPresetSelect"),
+  luaFileInput: document.getElementById("luaFileInput"),
+  luaEditor: document.getElementById("luaEditor"),
+  luaErrorBox: document.getElementById("luaErrorBox"),
+  luaMetaStatus: document.getElementById("luaMetaStatus"),
+  luaMetaSize: document.getElementById("luaMetaSize"),
+  luaMetaEntries: document.getElementById("luaMetaEntries"),
+  luaMetaFrames: document.getElementById("luaMetaFrames"),
+  btnLuaUploadRam: document.getElementById("btnLuaUploadRam"),
+  btnLuaSaveFlash: document.getElementById("btnLuaSaveFlash"),
+  btnLuaResetRom: document.getElementById("btnLuaResetRom"),
+  btnLuaLoadFile: document.getElementById("btnLuaLoadFile"),
+  btnLuaDownloadLuac: document.getElementById("btnLuaDownloadLuac"),
   logBox: document.getElementById("logBox"),
   btnClearLog: document.getElementById("btnClearLog"),
 };
@@ -385,6 +399,8 @@ let isDiagBusy = false;
 let manifestData = null;
 let isFlashing = false;
 let pendingRxResolver = null;
+let luaWasmExports = null;
+let activeLuaCompiled = null; // { image: Uint8Array, packetsRam: Uint8Array[], packetsFlash: Uint8Array[] }
 
 function log(msg, level = "info") {
   const line = document.createElement("div");
@@ -423,6 +439,12 @@ function updateControlsState() {
   if (ui.chkModeAbleton) ui.chkModeAbleton.disabled = !canDiag;
   if (ui.selPalette) ui.selPalette.disabled = !canDiag;
   if (ui.selBrightness) ui.selBrightness.disabled = !canDiag;
+  const canLuaUpload = canDiag && Boolean(activeLuaCompiled);
+  if (ui.btnLuaUploadRam) ui.btnLuaUploadRam.disabled = !canLuaUpload;
+  if (ui.btnLuaSaveFlash) ui.btnLuaSaveFlash.disabled = !canLuaUpload;
+  if (ui.btnLuaResetRom) ui.btnLuaResetRom.disabled = !canDiag;
+  if (ui.btnLuaDownloadLuac)
+    ui.btnLuaDownloadLuac.disabled = !activeLuaCompiled;
 }
 
 function setLoadedBundle(versionLabel, bundle) {
@@ -1618,8 +1640,382 @@ ui.btnTriggerFault.addEventListener("click", async () => {
   }
 });
 
-// Initialize on page load: load firmware manifest & auto-connect WebMIDI
+// =========================================================================
+// 4. On-Chip Lua Co-Processor Studio (Rust + full_moon WASM Compiler)
+// =========================================================================
+const LUA_SYSEX_CMD_BEGIN = 0x01;
+const LUA_SYSEX_CMD_CHUNK = 0x02;
+const LUA_SYSEX_CMD_COMMIT = 0x03;
+const LUA_SYSEX_CMD_SAVE = 0x04;
+const LUA_SYSEX_CMD_RESET = 0x05;
+
+const FALLBACK_LUA_SCRIPT = `-- scripts/bouncing_balls.lua
+function init()
+    for x = 0, 7 do
+        mem[x] = -1
+        mem[x + 8] = 1
+    end
+    set_tempo(75)
+end
+
+function on_grid(x, y, z)
+    if z == 1 then
+        if shift() == 1 or mem[x] == y then
+            mem[x] = -1
+        else
+            mem[x] = y
+            if y < 4 then mem[x + 8] = 1 else mem[x + 8] = -1 end
+        end
+        return 1
+    end
+    return 0
+end
+
+function on_fader(idx, val, hires)
+    if idx == 8 then
+        set_tempo(30 + ((16383 - hires) >> 7))
+    end
+end
+
+function on_tick(step)
+    led_all(0)
+    for x = 0, 7 do
+        local y = mem[x]
+        if y >= 0 then
+            local dy = mem[x + 8]
+            local ny = y + dy
+            if ny < 0 or ny > 7 or host_led(x, ny) > 0 then
+                dy = -dy
+                mem[x + 8] = dy
+                ny = y + dy
+                if ny < 0 then ny = 0 end
+                if ny > 7 then ny = 7 end
+                key_pulse(x, y, 50)
+                led(x, y, 15)
+            else
+                led(x, y, 4)
+            end
+            mem[x] = ny
+            led(x, ny, 12)
+        end
+    end
+end
+`;
+
+export function buildLuaUploadSysexPackets(
+  imageBytes,
+  { saveToFlash = false } = {},
+) {
+  const packets = [];
+  const totalLen = imageBytes.length;
+  packets.push(
+    new Uint8Array([
+      0xf0,
+      0x7d,
+      0x4c,
+      0x55,
+      0x41,
+      LUA_SYSEX_CMD_BEGIN,
+      totalLen & 0x7f,
+      (totalLen >> 7) & 0x7f,
+      0xf7,
+    ]),
+  );
+
+  const chunkSize = 16;
+  for (let off = 0; off < totalLen; off += chunkSize) {
+    const chunk = imageBytes.subarray(off, Math.min(off + chunkSize, totalLen));
+    const nibbles = [];
+    for (let i = 0; i < chunk.length; i++) {
+      nibbles.push((chunk[i] >> 4) & 0x0f, chunk[i] & 0x0f);
+    }
+    packets.push(
+      new Uint8Array([
+        0xf0,
+        0x7d,
+        0x4c,
+        0x55,
+        0x41,
+        LUA_SYSEX_CMD_CHUNK,
+        off & 0x7f,
+        (off >> 7) & 0x7f,
+        ...nibbles,
+        0xf7,
+      ]),
+    );
+  }
+
+  let xorCsum = 0;
+  for (let i = 0; i < totalLen; i++) {
+    xorCsum ^= imageBytes[i];
+  }
+  packets.push(
+    new Uint8Array([
+      0xf0,
+      0x7d,
+      0x4c,
+      0x55,
+      0x41,
+      LUA_SYSEX_CMD_COMMIT,
+      (xorCsum >> 4) & 0x0f,
+      xorCsum & 0x0f,
+      0xf7,
+    ]),
+  );
+
+  if (saveToFlash) {
+    packets.push(
+      new Uint8Array([0xf0, 0x7d, 0x4c, 0x55, 0x41, LUA_SYSEX_CMD_SAVE, 0xf7]),
+    );
+  }
+  return packets;
+}
+
+export function compileLuaWithWasm(sourceText, exports = luaWasmExports) {
+  if (!exports) {
+    throw new Error("Rust/WASM Lua compiler not loaded yet");
+  }
+  const encoded = new TextEncoder().encode(sourceText);
+  const srcPtr = exports.wasm_alloc(encoded.length || 1);
+  try {
+    if (encoded.length > 0) {
+      new Uint8Array(exports.memory.buffer, srcPtr, encoded.length).set(
+        encoded,
+      );
+    }
+    const rc = exports.wasm_compile_lua(srcPtr, encoded.length);
+    if (rc !== 0) {
+      const errPtr = exports.wasm_error_ptr();
+      const errLen = exports.wasm_error_len();
+      const errMsg = new TextDecoder().decode(
+        new Uint8Array(exports.memory.buffer, errPtr, errLen),
+      );
+      throw new Error(errMsg);
+    }
+    const outPtr = exports.wasm_output_ptr();
+    const outLen = exports.wasm_output_len();
+    const image = new Uint8Array(
+      exports.memory.buffer.slice(outPtr, outPtr + outLen),
+    );
+    const dv = new DataView(image.buffer, image.byteOffset, image.byteLength);
+    return {
+      image,
+      codeLen: dv.getUint16(4, true),
+      entryInit: dv.getUint16(6, true),
+      entryTick: dv.getUint16(8, true),
+      entryGrid: dv.getUint16(10, true),
+      entryFader: dv.getUint16(12, true),
+    };
+  } finally {
+    exports.wasm_free(srcPtr, encoded.length || 1);
+  }
+}
+
+function fmtEntryOffset(off) {
+  return off === 0xffff
+    ? "—"
+    : `0x${off.toString(16).toUpperCase().padStart(2, "0")}`;
+}
+
+function recompileLuaEditor() {
+  if (!ui.luaEditor || !luaWasmExports) return;
+  try {
+    const res = compileLuaWithWasm(ui.luaEditor.value);
+    const packetsRam = buildLuaUploadSysexPackets(res.image, {
+      saveToFlash: false,
+    });
+    const packetsFlash = buildLuaUploadSysexPackets(res.image, {
+      saveToFlash: true,
+    });
+    activeLuaCompiled = {
+      ...res,
+      packetsRam,
+      packetsFlash,
+    };
+    const pct = Math.round((res.image.length * 100) / 768);
+    if (ui.luaErrorBox) {
+      ui.luaErrorBox.classList.add("hidden");
+      ui.luaErrorBox.textContent = "";
+    }
+    if (ui.luaMetaStatus) ui.luaMetaStatus.textContent = "OK (full_moon Lua 5.4)";
+    if (ui.luaMetaSize)
+      ui.luaMetaSize.textContent = `${res.image.length} / 768 B (${pct}%)`;
+    if (ui.luaMetaEntries) {
+      ui.luaMetaEntries.textContent = `${fmtEntryOffset(res.entryInit)} / ${fmtEntryOffset(res.entryTick)} / ${fmtEntryOffset(res.entryGrid)} / ${fmtEntryOffset(res.entryFader)}`;
+    }
+    if (ui.luaMetaFrames)
+      ui.luaMetaFrames.textContent = `${packetsRam.length} frames`;
+  } catch (err) {
+    activeLuaCompiled = null;
+    if (ui.luaErrorBox) {
+      ui.luaErrorBox.classList.remove("hidden");
+      ui.luaErrorBox.textContent = err.message;
+    }
+    if (ui.luaMetaStatus) ui.luaMetaStatus.textContent = "Syntax / Size Error";
+    if (ui.luaMetaSize) ui.luaMetaSize.textContent = "—";
+    if (ui.luaMetaEntries) ui.luaMetaEntries.textContent = "—";
+    if (ui.luaMetaFrames) ui.luaMetaFrames.textContent = "—";
+  }
+  updateControlsState();
+}
+
+async function loadLuaPresetScript(scriptId) {
+  if (!ui.luaEditor || scriptId === "__custom__") return;
+  const candidates = [`scripts/${scriptId}`, `../scripts/${scriptId}`];
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { cache: "no-cache" });
+      if (res.ok) {
+        ui.luaEditor.value = await res.text();
+        recompileLuaEditor();
+        return;
+      }
+    } catch (_) {
+      // Try next candidate
+    }
+  }
+  if (!ui.luaEditor.value) {
+    ui.luaEditor.value = FALLBACK_LUA_SCRIPT;
+    recompileLuaEditor();
+  }
+}
+
+async function initLuaWasmStudio() {
+  if (!ui.luaEditor) return;
+  try {
+    const res = await fetch("apc_lua_compiler.wasm", { cache: "no-cache" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const wasmBytes = await res.arrayBuffer();
+    const { instance } = await WebAssembly.instantiate(wasmBytes, {});
+    luaWasmExports = instance.exports;
+    if (ui.luaWasmBadge) {
+      ui.luaWasmBadge.textContent = `Rust + full_moon WASM (${Math.round(wasmBytes.byteLength / 1024)} KB)`;
+    }
+    await loadLuaPresetScript(
+      ui.luaPresetSelect ? ui.luaPresetSelect.value : "bouncing_balls.lua",
+    );
+  } catch (err) {
+    if (ui.luaWasmBadge) {
+      ui.luaWasmBadge.textContent = "WASM Load Error";
+    }
+    log(`Failed to initialize Lua Rust/WASM compiler: ${err.message}`, "err");
+  }
+}
+
+if (ui.luaPresetSelect) {
+  ui.luaPresetSelect.addEventListener("change", () => {
+    loadLuaPresetScript(ui.luaPresetSelect.value);
+  });
+}
+
+if (ui.luaEditor) {
+  ui.luaEditor.addEventListener("input", () => {
+    if (ui.luaPresetSelect && ui.luaPresetSelect.value !== "__custom__") {
+      ui.luaPresetSelect.value = "__custom__";
+    }
+    recompileLuaEditor();
+  });
+}
+
+if (ui.btnLuaLoadFile && ui.luaFileInput) {
+  ui.btnLuaLoadFile.addEventListener("click", () => ui.luaFileInput.click());
+  ui.luaFileInput.addEventListener("change", async () => {
+    if (ui.luaFileInput.files.length === 0) return;
+    const file = ui.luaFileInput.files[0];
+    ui.luaEditor.value = await file.text();
+    if (ui.luaPresetSelect) ui.luaPresetSelect.value = "__custom__";
+    recompileLuaEditor();
+    log(`Loaded Lua script '${file.name}' into editor.`, "ok");
+  });
+}
+
+if (ui.btnLuaDownloadLuac) {
+  ui.btnLuaDownloadLuac.addEventListener("click", () => {
+    if (!activeLuaCompiled) return;
+    triggerDownload(activeLuaCompiled.image, "apc_script.luac");
+  });
+}
+
+async function uploadCompiledLuaToHardware({ saveToFlash = false } = {}) {
+  if (!activeLuaCompiled || isFlashing || isDiagBusy) return;
+  isDiagBusy = true;
+  updateControlsState();
+  try {
+    const { outPort } = getSelectedPorts();
+    await outPort.open().catch(() => {});
+    const packets = saveToFlash
+      ? activeLuaCompiled.packetsFlash
+      : activeLuaCompiled.packetsRam;
+    for (const pkt of packets) {
+      outPort.send(pkt);
+      await sleep(4);
+    }
+    if (ui.chkModeLua) ui.chkModeLua.checked = true;
+    const destLabel = saveToFlash
+      ? "RAM + Flash (0x08008000)"
+      : "RAM (live execution)";
+    log(
+      `Uploaded ${activeLuaCompiled.image.length} B LUA1 bytecode (${packets.length} SysEx frames) to ${destLabel}.`,
+      "ok",
+    );
+  } catch (err) {
+    log(`Lua SysEx upload failed: ${err.message}`, "err");
+  } finally {
+    isDiagBusy = false;
+    updateControlsState();
+  }
+  await readTelemetryAndCrash({ quiet: true });
+}
+
+if (ui.btnLuaUploadRam) {
+  ui.btnLuaUploadRam.addEventListener("click", () =>
+    uploadCompiledLuaToHardware({ saveToFlash: false }),
+  );
+}
+
+if (ui.btnLuaSaveFlash) {
+  ui.btnLuaSaveFlash.addEventListener("click", () =>
+    uploadCompiledLuaToHardware({ saveToFlash: true }),
+  );
+}
+
+if (ui.btnLuaResetRom) {
+  ui.btnLuaResetRom.addEventListener("click", async () => {
+    if (isFlashing || isDiagBusy) return;
+    isDiagBusy = true;
+    updateControlsState();
+    try {
+      const { outPort } = getSelectedPorts();
+      await outPort.open().catch(() => {});
+      outPort.send(
+        new Uint8Array([
+          0xf0,
+          0x7d,
+          0x4c,
+          0x55,
+          0x41,
+          LUA_SYSEX_CMD_RESET,
+          0xf7,
+        ]),
+      );
+      await sleep(20);
+      log(
+        "Reset Lua Co-Processor to built-in ROM script and cleared Flash 0x08008000.",
+        "ok",
+      );
+    } catch (err) {
+      log(`Lua ROM reset failed: ${err.message}`, "err");
+    } finally {
+      isDiagBusy = false;
+      updateControlsState();
+    }
+    await readTelemetryAndCrash({ quiet: true });
+  });
+}
+
+// Initialize on page load: load firmware manifest, WASM Lua compiler & auto-connect WebMIDI
 loadManifest();
+initLuaWasmStudio();
 connectWebMidi().then((ok) => {
   if (ok && ui.midiOutSelect.value && ui.midiInSelect.value) {
     readTelemetryAndCrash({ quiet: true });
