@@ -3,4 +3,5 @@ __pycache__
 .venv/
 .cache/
 build/
+tools/lua_wasm/target/
 compile_commands.json

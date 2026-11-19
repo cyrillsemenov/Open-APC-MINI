@@ -1,0 +1,18 @@
+[package]
+name = "apc_lua_compiler"
+version = "0.1.0"
+edition = "2021"
+description = "Lua 5.4 (full_moon AST) to Open APC Mini LUA1 stack-VM bytecode compiler (native + wasm32)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+full_moon = { version = "1.2", features = ["lua54"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
