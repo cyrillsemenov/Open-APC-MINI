@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Config / Debug — Open APC Mini</title>
+        <link href="style.css?v=20261121d" rel="stylesheet" />
+    </head>
+    <body>
+        <div class="container">
+            <div class="masthead">
+                <div class="brand">
+                    <h1>Open APC Mini</h1>
+                    <p class="subtitle">
+                        <i
+                            >Device Configuration, Live Telemetry &amp;
+                            Black-Box Diagnostics</i
+                        >
+                    </p>
+                </div>
+                <div class="header-right">
+                    <div class="top-nav">
+                        <a class="nav-link" href="index.html">Uploader</a>
+                        <a
+                            class="nav-link active"
+                            href="config.html"
+                            aria-current="page"
+                            >Config / Debug</a
+                        >
+                        <a class="nav-link" href="script.html">Script</a>
+                        <a class="nav-link" href="about.html">About</a>
+                        <a
+                            class="nav-link"
+                            href="https://github.com/cyrillsemenov/Open-APC-MINI"
+                            target="_blank"
+                            rel="noopener"
+                            >GitHub</a
+                        >
+                    </div>
+                    <div class="badge" id="midiStatusBadge">
+                        <span class="dot" id="midiStatusDot"></span>
+                        <span id="midiStatusText">WebMIDI Disconnected</span>
+                    </div>
+                </div>
+            </div>
+            <hr class="rule-header" />
+
+            <!-- 1. MIDI Device Connection -->
+            <div class="section">
+                <h2 class="section-title">
+                    <small id="deviceModeLabel" class="status-note"></small>
+                    1. USB-MIDI Connection
+                </h2>
+                <table
+                    class="port-table"
+                    width="100%"
+                    cellspacing="0"
+                    cellpadding="0"
+                >
+                    <tr>
+                        <td width="50%">
+                            <label for="midiOutSelect">MIDI Output Port</label>
+                            <select id="midiOutSelect" disabled>
+                                <option value="">
+                                    Click "Connect WebMIDI" first...
+                                </option>
+                            </select>
+                        </td>
+                        <td width="50%">
+                            <label for="midiInSelect">MIDI Input Port</label>
+                            <select id="midiInSelect" disabled>
+                                <option value="">
+                                    Click "Connect WebMIDI" first...
+                                </option>
+                            </select>
+                        </td>
+                    </tr>
+                </table>
+                <div class="btn-row">
+                    <button id="btnConnectMidi" type="button">
+                        Connect WebMIDI
+                    </button>
+                    <button id="btnProbeDevice" type="button" disabled>
+                        Check Device Status
+                    </button>
+                </div>
+            </div>
+            <hr />
+
+            <!-- 2. Device Configuration -->
+            <div class="section">
+                <h2 class="section-title">2. Device Configuration (SysEx)</h2>
+
+                <div class="mode-bar">
+                    <b style="font-size: 0.85rem">Active Modes:</b>
+                    <label class="mode-toggle">
+                        <input
+                            id="chkModeMidi"
+                            type="checkbox"
+                            checked
+                            disabled
+                        />
+                        MIDI (Notes/CC)
+                    </label>
+                    <label class="mode-toggle">
+                        <input
+                            id="chkModeSerialosc"
+                            type="checkbox"
+                            checked
+                            disabled
+                        />
+                        serialosc (mext)
+                    </label>
+                    <label class="mode-toggle">
+                        <input id="chkModeLua" type="checkbox" disabled />
+                        Lua VM
+                    </label>
+                    <label class="mode-toggle">
+                        <input
+                            id="chkModeAbleton"
+                            type="checkbox"
+                            checked
+                            disabled
+                        />
+                        Ableton Intro (0x60)
+                    </label>
+                    <label class="mode-toggle">
+                        Palette:
+                        <select id="selPalette" class="inline-select" disabled>
+                            <option value="0">0: Grn/Yel/Red</option>
+                            <option value="1">1: Red/Yel/Grn</option>
+                            <option value="2">2: Warm Grn/Yel</option>
+                            <option value="3">3: Warm Red/Yel</option>
+                        </select>
+                    </label>
+                    <label class="mode-toggle">
+                        Brightness:
+                        <select
+                            id="selBrightness"
+                            class="inline-select"
+                            disabled
+                        >
+                            <option value="0">0 (1/16)</option>
+                            <option value="1">1 (2/16)</option>
+                            <option value="2">2 (4/16)</option>
+                            <option value="3" selected>3 (14/16 Max)</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div class="btn-row">
+                    <button id="btnLedSweep" type="button" disabled>
+                        LED Test Sweep
+                    </button>
+                    <button id="btnLedClear" type="button" disabled>
+                        Clear All LEDs
+                    </button>
+                </div>
+            </div>
+            <hr />
+
+            <!-- 3. Live Diagnostics, Post-Mortem Crash Log & Memory Peek -->
+            <div class="section">
+                <h2 class="section-title">
+                    <small id="diagStatusLabel" class="status-note"
+                        >SWD-Less SysEx Inspector</small
+                    >
+                    3. Live Diagnostics, Post-Mortem Black-Box &amp; Memory Peek
+                </h2>
+
+                <div class="btn-row" style="margin-top: 0">
+                    <button id="btnReadDiag" type="button" disabled>
+                        Read Telemetry &amp; Crash Log
+                    </button>
+                    <button id="btnLivePoll" type="button" disabled>
+                        Start Live Poll (1 Hz)
+                    </button>
+                    <button
+                        id="btnTriggerFault"
+                        type="button"
+                        style="display: none"
+                        disabled
+                    >
+                        Test Fault (UDF #0)
+                    </button>
+                </div>
+
+                <table class="meta-table" id="telemGrid">
+                    <thead>
+                        <tr>
+                            <th>MCU Silicon &amp; Flash</th>
+                            <th>Last Reset Cause (RCC_CSR)</th>
+                            <th>Uptime</th>
+                            <th>Main Loop &amp; Max Latency</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><b id="telemSilicon">—</b></td>
+                            <td><b id="telemReset">—</b></td>
+                            <td><b id="telemUptime">—</b></td>
+                            <td><b id="telemLoop">—</b></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <table
+                    class="meta-table"
+                    style="margin-top: 6px; display: none"
+                >
+                    <thead>
+                        <tr>
+                            <th>Faders 1..8 + Master (ADC1+DMA1)</th>
+                            <th>Shift</th>
+                            <th>Last MIDI Input Event</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><b id="telemFaders">—</b></td>
+                            <td><b id="telemShift">—</b></td>
+                            <td><b id="telemLastMidi">—</b></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div id="crashBox" class="crash-box hidden">
+                    <div class="crash-header">
+                        <b id="crashTitle">CRASH LOG</b>
+                        <div class="btn-row" style="margin-top: 0">
+                            <button
+                                id="btnCopyCrash"
+                                type="button"
+                                style="padding: 2px 8px; font-size: 0.78rem"
+                            >
+                                Copy Markdown Report
+                            </button>
+                            <button
+                                id="btnClearCrash"
+                                type="button"
+                                style="padding: 2px 8px; font-size: 0.78rem"
+                            >
+                                Clear Crash Log
+                            </button>
+                        </div>
+                    </div>
+                    <pre class="crash-pre" id="crashPre"></pre>
+                </div>
+
+                <div class="peek-bar">
+                    <input
+                        id="peekAddrInput"
+                        type="text"
+                        value="0x08007800"
+                        size="12"
+                        style="
+                            font-family: var(--mono);
+                            font-size: 0.85rem;
+                            padding: 2px 6px;
+                        "
+                    />
+                    <button id="btnPeekMem" type="button" disabled>
+                        Peek 64 B
+                    </button>
+                    <button
+                        class="preset-btn"
+                        type="button"
+                        data-addr="0x08007800"
+                    >
+                        Crash Log
+                    </button>
+                    <button
+                        class="preset-btn"
+                        type="button"
+                        data-addr="0x1FFFF7E0"
+                    >
+                        Silicon UID
+                    </button>
+                    <button
+                        class="preset-btn"
+                        type="button"
+                        data-addr="0x20000000"
+                    >
+                        SRAM Base
+                    </button>
+                    <button
+                        class="preset-btn"
+                        type="button"
+                        data-addr="0x40021000"
+                    >
+                        RCC Regs
+                    </button>
+                </div>
+                <pre class="peek-pre hidden" id="peekPre"></pre>
+            </div>
+            <hr />
+
+            <!-- 4. Console Log -->
+            <div class="section">
+                <h2 class="section-title">
+                    <button id="btnClearLog" class="status-btn" type="button">
+                        Clear
+                    </button>
+                    Protocol Log
+                </h2>
+                <div class="log-box" id="logBox"></div>
+            </div>
+        </div>
+
+        <script type="module" src="page-config.js?v=20261121a"></script>
+    </body>
+</html>

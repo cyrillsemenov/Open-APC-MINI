@@ -9,7 +9,7 @@ use full_moon::ast::{
 use full_moon::tokenizer::{Symbol, TokenReference, TokenType};
 
 pub const LUA_HEADER_SIZE: usize = 16;
-pub const LUA_MAX_IMAGE_LEN: usize = 768;
+pub const LUA_MAX_IMAGE_LEN: usize = 4096;
 pub const LUA_ENTRY_NONE: u16 = 0xFFFF;
 
 // Opcodes (must match src/protocol/lua_vm.h and tools/lua_compiler.py)
@@ -107,6 +107,7 @@ pub struct LuaAstCompiler {
     entry_tick: u16,
     entry_grid: u16,
     entry_fader: u16,
+    entry_button: u16,
 }
 
 impl Default for LuaAstCompiler {
@@ -126,6 +127,7 @@ impl LuaAstCompiler {
             entry_tick: LUA_ENTRY_NONE,
             entry_grid: LUA_ENTRY_NONE,
             entry_fader: LUA_ENTRY_NONE,
+            entry_button: LUA_ENTRY_NONE,
         }
     }
 
@@ -172,9 +174,9 @@ impl LuaAstCompiler {
         if let Some(&slot) = self.locals.get(name) {
             return Ok(slot);
         }
-        if self.next_local_slot >= 32 {
+        if self.next_local_slot >= 64 {
             return Err(format!(
-                "Too many local variables in function (max 32) at {name:?}"
+                "Too many local variables in function (max 64) at {name:?}"
             ));
         }
         let slot = self.next_local_slot;
@@ -221,7 +223,7 @@ impl LuaAstCompiler {
         image.extend_from_slice(&self.entry_tick.to_le_bytes());
         image.extend_from_slice(&self.entry_grid.to_le_bytes());
         image.extend_from_slice(&self.entry_fader.to_le_bytes());
-        image.extend_from_slice(&0u16.to_le_bytes());
+        image.extend_from_slice(&self.entry_button.to_le_bytes());
         image.extend_from_slice(&self.code);
 
         if image.len() > LUA_MAX_IMAGE_LEN {
@@ -252,9 +254,10 @@ impl LuaAstCompiler {
             "on_tick" | "tick" => self.entry_tick = entry_pos,
             "on_grid" | "g.key" | "grid_key" => self.entry_grid = entry_pos,
             "on_fader" | "fader_move" => self.entry_fader = entry_pos,
+            "on_button" | "button" => self.entry_button = entry_pos,
             _ => {
                 return Err(format!(
-                    "Unsupported entry function {raw_name:?}; expected init, on_tick, on_grid, or on_fader"
+                    "Unsupported entry function {raw_name:?}; expected init, on_tick, on_grid, on_fader, or on_button"
                 ))
             }
         }
@@ -765,6 +768,7 @@ mod tests {
             include_str!("../../../scripts/bouncing_balls.lua"),
             include_str!("../../../scripts/game_of_life.lua"),
             include_str!("../../../scripts/bouncy_echo.lua"),
+            include_str!("../../../scripts/ripple_sequencer.lua"),
         ];
         for src in scripts {
             let img = compile_lua_source(src).expect("script should compile");

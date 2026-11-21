@@ -3,36 +3,45 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>About — Open APC Mini Firmware</title>
-        <link href="style.css" rel="stylesheet" />
+        <title>About — Open APC Mini</title>
+        <link href="style.css?v=20261121d" rel="stylesheet" />
     </head>
     <body>
         <div class="container">
-            <header>
+            <div class="masthead">
                 <div class="brand">
-                    <div class="pad-grid-icon" aria-hidden="true">
-                        <span></span><span></span><span></span> <span></span
-                        ><span></span><span></span> <span></span><span></span
-                        ><span></span>
-                    </div>
-                    <div>
-                        <h1>Open APC Mini Firmware</h1>
-                        <p class="subtitle">
-                            Background, Hardware &amp; Roadmap
-                        </p>
-                    </div>
+                    <h1>Open APC Mini</h1>
+                    <p class="subtitle">
+                        <i>Background, Features &amp; Roadmap</i>
+                    </p>
                 </div>
                 <div class="header-right">
-                    <a class="nav-link" href="index.html">
-                        &larr; Back to Updater
-                    </a>
+                    <div class="top-nav">
+                        <a class="nav-link" href="index.html">Uploader</a>
+                        <a class="nav-link" href="config.html"
+                            >Config / Debug</a
+                        >
+                        <a class="nav-link" href="script.html">Script</a>
+                        <a
+                            class="nav-link active"
+                            href="about.html"
+                            aria-current="page"
+                            >About</a
+                        >
+                        <a
+                            class="nav-link"
+                            href="https://github.com/cyrillsemenov/Open-APC-MINI"
+                            target="_blank"
+                            rel="noopener"
+                            >GitHub</a
+                        >
+                    </div>
                 </div>
-            </header>
+            </div>
+            <hr class="rule-header" />
 
-            <section class="card prose">
-                <div class="card-title">
-                    <span>The Story</span>
-                </div>
+            <div class="section prose">
+                <h2 class="section-title">The Story</h2>
                 <p>
                     I have my APC Mini lying around which I've been using on and
                     off for years. It's a nice control panel: it has 9 faders,
@@ -49,20 +58,20 @@
                         rel="noopener"
                         >craigsblackie/MPK-Mini-open</a
                     >. The MPK uses almost the same MCU as the APC
-                    (<code>STM32F102RBT6</code>), so it was almost definitely
+                    (<tt>STM32F102RBT6</tt>), so it was almost definitely
                     vulnerable to power-glitch readout via
                     <a
                         href="https://github.com/CTXz/stm32f1-picopwner"
                         target="_blank"
                         rel="noopener"
                     >
-                        CTXz/stm32f1-picopwner </a
+                        CTXz/stm32f1-picopwner</a
                     >. I connected all needed wires to an RPi Pico and dumped
                     the firmware.
                 </p>
                 <p>
-                    Why do we need a dump? First of all, it is a save point;
-                    second, we might find something interesting in there. And
+                    Why do we need a dump? First of all, it is a save point.
+                    Second, we might find something interesting in there. And
                     boy there was — a hidden USB-MIDI bootloader mode, activated
                     only by a special SysEx command! Even more counterintuitive
                     is that on factory firmware, after sending this command, you
@@ -71,8 +80,8 @@
                 </p>
                 <p>
                     The circuit of the APC Mini is remarkably simple: just an
-                    <code>STM32F102RBT6</code> MCU and a <code>TM1629</code> LED
-                    driver. After initially reconstructing the stock firmware to
+                    <tt>STM32F102RBT6</tt> MCU and a <tt>TM1629</tt> LED driver.
+                    After initially reconstructing the stock firmware to
                     understand every detail of the board and protocol, the
                     firmware now runs on the open-source
                     <a
@@ -82,87 +91,134 @@
                     >
                         libopencm3
                     </a>
-                    peripheral and USB-MIDI stack with key fixes applied.
+                    peripheral and USB-MIDI stack with key fixes and new
+                    capabilities.
                 </p>
-            </section>
+            </div>
+            <hr />
 
-            <section class="card prose">
-                <div class="card-title">
-                    <span>What's Fixed &amp; Improved</span>
-                </div>
+            <div class="section prose">
+                <h2 class="section-title">What's Built &amp; Improved</h2>
                 <ul>
                     <li>
-                        <strong>Soft Reboot on Updater Handshake:</strong> No
-                        physical USB power-cycle is needed when updating from
-                        this firmware — the MCU pulls the USB D+ pull-up
-                        (<code>PA8</code>) low, forces USB re-enumeration, and
-                        resets directly into the bootloader.
-                        <em>
+                        <b>Soft Reboot on Updater Handshake:</b> No physical USB
+                        power-cycle is needed when updating from this firmware —
+                        the MCU pulls the USB D+ pull-up (<tt>PA8</tt>) low,
+                        forces USB re-enumeration, and resets directly into the
+                        bootloader on the
+                        <a href="index.html">Uploader</a> page.
+                        <i>
                             (Note: if you are updating from the original factory
                             firmware for the very first time, you will need to
                             unplug and replug the USB cable once when prompted.)
-                        </em>
+                        </i>
                     </li>
                     <li>
-                        <strong>Smooth Slider / Fader Filtering:</strong> On
-                        stock firmware, the faders jump multiple values and make
-                        it hard to dial in an exact MIDI CC value even within
-                        the 0–127 range. The ADC filter and hysteresis have been
-                        fixed for smooth, predictable single-step tracking.
+                        <b>Smooth 7-bit &amp; 14-bit Faders:</b> On stock
+                        firmware, the faders jump multiple values and make it
+                        hard to dial in an exact MIDI CC value even within the
+                        0–127 range. The ADC filter and hysteresis now track
+                        single-step 7-bit MIDI CC cleanly alongside 14-bit
+                        high-resolution values (<tt>0–16383</tt>).
                     </li>
-                </ul>
-            </section>
-
-            <section class="card prose">
-                <div class="card-title">
-                    <span>Roadmap &amp; Future Plans</span>
-                </div>
-                <ul>
-                    <li>Implement Mackie Control Universal (MCU) protocol</li>
                     <li>
-                        <a
-                            href="https://github.com/monome/serialosc"
-                            target="_blank"
-                            rel="noopener"
+                        <b
+                            >Simultaneous USB-MIDI + Monome
+                            <tt>serialosc</tt>:</b
                         >
-                            monome/serialosc
-                        </a>
-                        compatibility
+                        Runs a composite USB device providing class-compliant
+                        USB-MIDI (plus Ableton Live Intro <tt>0x60</tt>)
+                        alongside a Monome FTDI <tt>serialosc</tt> (<tt
+                            >mext</tt
+                        >
+                        v4) 8&times;8 varibright grid and 3 tilt banks mapped to
+                        the 9 faders. Active modes, 4 color palettes, and 4
+                        TM1629 brightness steps can be toggled live on
+                        <a href="config.html">Config / Debug</a>.
                     </li>
                     <li>
-                        Poor man's monome grid (run Lua scripts directly inside
-                        your APC)
+                        <b>On-Chip Lua Co-Processor:</b> Write sequencers and
+                        generative scripts directly inside the APC Mini. An
+                        in-browser Rust + <tt>full_moon</tt>
+                        WASM compiler turns a Lua 5.4 subset into compact
+                        <tt>LUA1</tt> stack bytecode (with cooperative
+                        coroutines and non-destructive LED overlays), uploaded
+                        to live RAM or Flash (<tt>0x08008000</tt>) from the
+                        <a href="script.html">Script</a> page — see the
+                        <a href="script.html#scripting-guide">Scripting Guide</a
+                        >.
                     </li>
                     <li>
-                        Improved visual feedback on the 8&times;8 grid and round
-                        LEDs
+                        <b>SWD-Less Telemetry &amp; Post-Mortem Black-Box:</b>
+                        Read live MCU telemetry, peek any 32-bit address, and
+                        inspect persistent crash logs saved to Flash Page 30
+                        (<tt>0x08007800</tt>) with ELF symbol resolution on
+                        <a href="config.html">Config / Debug</a>.
                     </li>
                 </ul>
-                <p>Everyone is welcome to contribute!</p>
-            </section>
+            </div>
+            <hr />
 
-            <section class="card prose">
-                <div class="card-title">
-                    <span>
-                        Important Notice for Custom Hardware &amp; License
-                    </span>
-                </div>
+            <div class="section prose">
+                <h2 class="section-title">Source Code</h2>
+                <p>
+                    Source code, firmware releases, Unicorn emulator tests, CLI
+                    tools, and example Lua scripts are hosted on GitHub:
+                    <a
+                        href="https://github.com/cyrillsemenov/Open-APC-MINI"
+                        target="_blank"
+                        rel="noopener"
+                        >github.com/cyrillsemenov/Open-APC-MINI</a
+                    >.
+                </p>
+                <p>
+                    <b>Troubleshooting &amp; Fallback:</b> If something goes
+                    wrong, you can flash <tt>v0.2.1</tt> on the
+                    <a href="index.html">Uploader</a> page — it is just the
+                    fixed USB-MIDI firmware (soft reboot + smooth faders)
+                    without <tt>serialosc</tt> or the Lua VM. Please capture
+                    your telemetry &amp; crash log on
+                    <a href="config.html">Config / Debug</a>
+                    (<i>Read Telemetry &amp; Crash Log</i> &rarr;
+                    <i>Copy Markdown Report</i>) and
+                    <a
+                        href="https://github.com/cyrillsemenov/Open-APC-MINI/issues"
+                        target="_blank"
+                        rel="noopener"
+                        >file an issue on GitHub</a
+                    >.
+                </p>
+                <p>
+                    Everyone is welcome to contribute — open an issue or PR on
+                    <a
+                        href="https://github.com/cyrillsemenov/Open-APC-MINI"
+                        target="_blank"
+                        rel="noopener"
+                        >GitHub</a
+                    >!
+                </p>
+            </div>
+            <hr />
+
+            <div class="section prose">
+                <h2 class="section-title">
+                    Important Notice for Custom Hardware &amp; License
+                </h2>
                 <p>
                     The default USB
-                    <code>VID:PID</code> (<code>0x09E8:0x0028</code>) and vendor
-                    strings are configured strictly for interoperability on
-                    genuine retail Akai APC Mini hardware. If you build or adapt
-                    this firmware for any non-Akai or custom hardware target,
-                    please override <code>USB_VID</code>, <code>USB_PID</code>,
-                    and <code>USB_STRING_VENDOR</code> (for example via
+                    <tt>VID:PID</tt> (<tt>0x09E8:0x0028</tt>) and vendor strings
+                    are configured strictly for interoperability on genuine
+                    retail Akai APC Mini hardware. If you build or adapt this
+                    firmware for any non-Akai or custom hardware target, please
+                    override <tt>USB_VID</tt>, <tt>USB_PID</tt>, and
+                    <tt>USB_STRING_VENDOR</tt> (for example via
                     <a href="https://pid.codes" target="_blank" rel="noopener"
                         >pid.codes</a
                     >).
                 </p>
                 <p>
                     This project's original firmware, tools, and WebMIDI updater
-                    are released under the <strong>MIT License</strong> (linking
-                    against
+                    are released under the <b>MIT License</b> (linking against
                     <a
                         href="https://github.com/libopencm3/libopencm3"
                         target="_blank"
@@ -170,9 +226,9 @@
                     >
                         libopencm3
                     </a>
-                    under <code>LGPL-3.0-or-later</code>).
+                    under <tt>LGPL-3.0-or-later</tt>).
                 </p>
-            </section>
+            </div>
         </div>
     </body>
 </html>

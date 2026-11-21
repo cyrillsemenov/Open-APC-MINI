@@ -28,7 +28,7 @@ from luaparser import ast, astnodes
 
 # Bytecode Header Constants
 LUA_HEADER_SIZE = 16
-LUA_MAX_IMAGE_LEN = 768
+LUA_MAX_IMAGE_LEN = 4096
 LUA_ENTRY_NONE = 0xFFFF
 
 # Opcodes (must match src/protocol/lua_vm.h)
@@ -136,6 +136,7 @@ class LuaASTCompiler:
             "on_tick": LUA_ENTRY_NONE,
             "on_grid": LUA_ENTRY_NONE,
             "on_fader": LUA_ENTRY_NONE,
+            "on_button": LUA_ENTRY_NONE,
         }
 
     def emit(self, *bs: int) -> int:
@@ -173,8 +174,8 @@ class LuaASTCompiler:
     def alloc_local_slot(self, name: str) -> int:
         if name in self.locals:
             return self.locals[name]
-        if self.next_local_slot >= 32:
-            raise SyntaxError(f"Too many local variables in function (max 32) at {name!r}")
+        if self.next_local_slot >= 64:
+            raise SyntaxError(f"Too many local variables in function (max 64) at {name!r}")
         slot = self.next_local_slot
         self.locals[name] = slot
         self.next_local_slot += 1
@@ -203,7 +204,7 @@ class LuaASTCompiler:
             self.entries["on_tick"],
             self.entries["on_grid"],
             self.entries["on_fader"],
-            0,
+            self.entries["on_button"],
         )
         image = header + bytes(self.code)
         if len(image) > LUA_MAX_IMAGE_LEN:
@@ -223,10 +224,12 @@ class LuaASTCompiler:
             "grid_key": "on_grid",
             "on_fader": "on_fader",
             "fader_move": "on_fader",
+            "on_button": "on_button",
+            "button": "on_button",
         }.get(raw_name)
         if norm_name is None:
             raise SyntaxError(
-                f"Unsupported entry function {raw_name!r}; expected init, on_tick, on_grid, or on_fader"
+                f"Unsupported entry function {raw_name!r}; expected init, on_tick, on_grid, on_fader, or on_button"
             )
 
         self.locals.clear()
@@ -661,7 +664,7 @@ def main() -> int:
 
     src = args.script.read_text(encoding="utf-8")
     image = compile_lua_source(src)
-    _, code_len, e_init, e_tick, e_grid, e_fader, _ = struct.unpack("<4sHHHHHH", image[:16])
+    _, code_len, e_init, e_tick, e_grid, e_fader, e_btn = struct.unpack("<4sHHHHHH", image[:16])
 
     if args.emit_c:
         print(format_c_array(image))
@@ -669,7 +672,7 @@ def main() -> int:
 
     print(
         f"Compiled {args.script.name}: {len(image)} B total ({code_len} B bytecode) | "
-        f"entries: init=0x{e_init:04X} tick=0x{e_tick:04X} grid=0x{e_grid:04X} fader=0x{e_fader:04X}"
+        f"entries: init=0x{e_init:04X} tick=0x{e_tick:04X} grid=0x{e_grid:04X} fader=0x{e_fader:04X} btn=0x{e_btn:04X}"
     )
 
     if args.output:

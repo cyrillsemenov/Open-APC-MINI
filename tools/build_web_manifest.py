@@ -240,6 +240,7 @@ def stage_lua_scripts(out_dir: Path, scripts_src: Path = Path("scripts")) -> Non
         "bouncing_balls.lua": "bouncing_balls.lua — Polyrhythmic Bouncing Ball Sequencer (14-bit Fader Tempo)",
         "game_of_life.lua": "game_of_life.lua — Conway's Game of Life Generative Sequencer",
         "bouncy_echo.lua": "bouncy_echo.lua — Built-in ROM Varibright Diamond Ripple & Echo",
+        "ripple_sequencer.lua": "ripple_sequencer.lua — 2D Wave Physics & Chain-Reaction Ripple Sequencer",
     }
 
     entries: list[dict[str, str]] = []

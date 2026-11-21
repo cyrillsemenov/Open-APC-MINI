@@ -76,18 +76,21 @@ static bool write_bootloader_magic_page(uint32_t page_addr) {
 }
 
 bool bootloader_write_flash_page(uint32_t page_addr, const uint8_t *data, uint16_t len) {
+    uint16_t max_len = (page_addr >= 0x08008000UL) ? 4096U : 1024U;
     if (page_addr < 0x08007800UL || page_addr == (uint32_t)(uintptr_t)_boot_magic_page ||
-        (page_addr & 0x3FFUL) != 0 || len > 1024U) {
+        (page_addr & 0x3FFUL) != 0 || len > max_len) {
         return false;
     }
 
     flash_unlock();
     flash_clear_status_flags();
-    flash_erase_page(page_addr);
-
-    if ((FLASH_SR & (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) != 0) {
-        flash_lock();
-        return false;
+    uint16_t erase_len = (len > 1024U) ? len : 1024U;
+    for (uint16_t off = 0U; off < erase_len; off = (uint16_t)(off + 1024U)) {
+        flash_erase_page(page_addr + (uint32_t)off);
+        if ((FLASH_SR & (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) != 0) {
+            flash_lock();
+            return false;
+        }
     }
 
     if (data != 0 && len > 0U) {
