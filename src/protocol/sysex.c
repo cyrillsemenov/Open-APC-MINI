@@ -125,6 +125,7 @@ static void handle_diag_sysex(const uint8_t *msg, uint16_t len) {
         if (len >= 10U && msg[8] < 4U) {
             monome_mode_set_brightness(msg[8], now);
         }
+        apc_mode_save_config();
         uint8_t rep[2] = {
             apc_mode_get_flags(),
             (uint8_t)(((monome_mode_get_brightness() & 0x03U) << 4U) |

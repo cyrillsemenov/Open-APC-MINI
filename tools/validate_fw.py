@@ -36,6 +36,8 @@ APP_SIZE = 0x00005800  # 22,528 B (0x08002000..0x080077FF)
 APP_CHK_OFF = 0x000057FE
 BOOT_MAGIC_ADDR = 0x08007C00
 BOOT_MAGIC = bytes([0x55, 0x5A, 0xA5, 0xAA, 0x59, 0x95, 0x3A, 0xA3])
+CONFIG_FLASH_ADDR = 0x08009000
+CONFIG_MAGIC = 0x41504331  # "APC1"
 
 SRAM_BASE = 0x20000000
 SRAM_SIZE = 0x00004000  # 16 KB
@@ -1229,6 +1231,92 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
     ok(
         "Lua Ripple Sequencer",
         f"{len(ripple_img)} B image, Scene scale LED, wave expansion -> MIDI Note 0x33 + 150ms gate",
+    )
+
+    # 10c. Persistent Flash Config (0x08009000) & Power-Cycle / IWDGRST Safe-Mode Recovery
+    # Save active ripple_sequencer.lua to Flash (0x08008000) and persist flags=0x0F, palette=2, brightness=1
+    mcu.usb_ep_out(2, bytes([0xF0, 0x7D, 0x4C, 0x55, 0x41, 0x04, 0xF7]))
+    mcu.run_steps(400_000)
+    save_acks = b"".join(p[2:] for p in mcu.usb_poll_ep1_in() if len(p) > 2)
+    check(
+        b"\xf0\x7dLUA\x7f\x01\xf7" in save_acks,
+        f"LUA_SYSEX_CMD_SAVE did not ACK cleanly (ep1={save_acks.hex(' ')})",
+    )
+    mcu.usb_ep_out(2, bytes([0xF0, 0x7D, 0x41, 0x50, 0x43, 0x06, 0x0F, 0x02, 0x01, 0xF7]))
+    mcu.run_steps(80_000)
+    mcu.usb_poll_midi_in()
+
+    cfg_raw = bytes(mcu.uc.mem_read(CONFIG_FLASH_ADDR, 8))
+    exp_csum = (~(0x0F ^ 2 ^ 1)) & 0xFF
+    check(
+        struct.unpack("<IBBBB", cfg_raw) == (CONFIG_MAGIC, 0x0F, 2, 1, exp_csum),
+        f"Persistent config not written to 0x{CONFIG_FLASH_ADDR:08X}: {cfg_raw.hex(' ')}",
+    )
+    saved_lua_flash = bytes(mcu.uc.mem_read(0x08008000, 0x1000))
+
+    def reboot_with_flash(lua_blob: bytes, cfg_blob: bytes, rcc_csr: int = 0) -> tuple[STM32F102Harness, bytes]:
+        hm = STM32F102Harness(app)
+        hm.uc.mem_write(0x08008000, lua_blob)
+        hm.uc.mem_write(CONFIG_FLASH_ADDR, cfg_blob)
+        if rcc_csr:
+            hm.regs[0x40021024] = rcc_csr
+        hm.boot(max_insns=80_000)
+        hm.usb_reset()
+        hm.usb_ep0_setup(bytes([0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x12, 0x00]), expect_in=True)
+        hm.usb_ep0_setup(bytes([0x00, 0x09, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00]), expect_in=False)
+        for _ in range(4):
+            for _ in range(8):
+                hm.call_isr(VEC_SYSTICK)
+            hm.run_steps(15_000)
+        hm.usb_ep1_out(bytes([0x04, 0xF0, 0x7D, 0x41, 0x04, 0x50, 0x43, 0x01, 0x05, 0xF7, 0x00, 0x00]))
+        t_pkts: list[bytes] = []
+        for _ in range(8):
+            hm.run_steps(20_000)
+            t_pkts.extend(hm.usb_poll_midi_in())
+        sub, tb = decode_diag_nibbles(extract_usb_midi_sysex(t_pkts))
+        check(sub == 0x01 and len(tb) == 30, f"Power-cycle telemetry failed (sub={sub}, len={len(tb)})")
+        return hm, tb
+
+    # Power Cycle #1: Normal boot restores Lua=ON, palette=2, brightness=1 and runs Flash script init()
+    hm1, tb1 = reboot_with_flash(saved_lua_flash, cfg_raw + b"\xff" * (0x400 - 8))
+    check(
+        tb1[28] == 0x0F and tb1[29] == ((1 << 4) | 2),
+        f"Power-cycle #1 did not restore config (flags=0x{tb1[28]:02X}, palbri=0x{tb1[29]:02X})",
+    )
+    check(
+        (hm1.round_led_sinks[0] & 0x08) == 0 and (hm1.round_led_sinks[0] & 0x02) == 0,
+        f"Power-cycle #1 Flash script init() did not light Scene 1 + Track 1 LEDs (sinks={hm1.round_led_sinks})",
+    )
+
+    # Power Cycle #2: IWDGRST (bit 29) triggers Safe Mode (Lua=OFF for boot, Flash intact, zero leaked LEDs)
+    hm2, tb2 = reboot_with_flash(saved_lua_flash, cfg_raw + b"\xff" * (0x400 - 8), rcc_csr=(1 << 29))
+    check(
+        tb2[28] == 0x0B and tb2[29] == ((1 << 4) | 2),
+        f"Safe-mode boot did not mask Lua while keeping palette/brightness (flags=0x{tb2[28]:02X}, palbri=0x{tb2[29]:02X})",
+    )
+    check(
+        bytes(hm2.uc.mem_read(CONFIG_FLASH_ADDR, 8)) == cfg_raw,
+        "Safe-mode boot modified persistent Flash config",
+    )
+    check(
+        (hm2.round_led_sinks[0] & 0x0F) == 0x0F,
+        f"Safe-mode boot leaked script init() round LEDs: {hm2.round_led_sinks}",
+    )
+
+    # Power Cycle #3: Persisted Lua=OFF with saved Flash script leaves init() unexecuted (zero phantom LEDs)
+    off_cfg = struct.pack("<IBBBB", CONFIG_MAGIC, 0x0B, 0, 3, (~(0x0B ^ 0 ^ 3)) & 0xFF)
+    hm3, tb3 = reboot_with_flash(saved_lua_flash, off_cfg + b"\xff" * (0x400 - 8))
+    check(
+        tb3[28] == 0x0B,
+        f"Power-cycle #3 expected Lua=OFF (0x0B), got 0x{tb3[28]:02X}",
+    )
+    check(
+        (hm3.round_led_sinks[0] & 0x0F) == 0x0F,
+        f"Disabled Flash script leaked phantom init() round LEDs at boot: {hm3.round_led_sinks}",
+    )
+    ok(
+        "Persistent Flash config",
+        "0x08009000 save/restore across power cycle, IWDGRST safe mode, zero phantom boot LEDs",
     )
 
     # 11. Bootloader DFU Unlock & Reset

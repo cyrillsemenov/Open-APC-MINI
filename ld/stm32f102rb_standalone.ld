@@ -10,6 +10,7 @@ MEMORY
 
 PROVIDE(_boot_magic_page = 0x0801FC00);
 PROVIDE(_crash_log_page = 0x0801F800);
-PROVIDE(_lua_flash_page = 0x0801F400);
+PROVIDE(_lua_flash_page = 0x0801E000);
+PROVIDE(_config_flash_page = 0x0801F000);
 
 INCLUDE cortex-m-generic.ld

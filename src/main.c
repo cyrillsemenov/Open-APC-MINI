@@ -48,6 +48,7 @@ int main(void) {
     monome_mode_init(board_ticks());
     faders_init();
     lua_vm_init(board_ticks());
+    apc_mode_load_config(board_ticks());
     board_watchdog_init();
 
     while (1) {

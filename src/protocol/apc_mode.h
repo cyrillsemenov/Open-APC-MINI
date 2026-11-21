@@ -12,6 +12,8 @@
 #define APC_MODE_FLAGS_DEFAULT  (APC_MODE_FLAG_MIDI | APC_MODE_FLAG_SERIALOSC | APC_MODE_FLAG_ABLETON)
 
 void apc_mode_init(void);
+void apc_mode_load_config(uint32_t now_ticks);
+void apc_mode_save_config(void);
 uint8_t apc_mode_get_flags(void);
 void apc_mode_set_flags(uint8_t flags, uint32_t now_ticks);
 void apc_mode_on_button(apc_btn_group_t group, uint8_t index, bool pressed);

@@ -9,8 +9,11 @@ extern uint8_t _boot_magic_page[];
 // Provided by the linker script at 0x08007800 (1 KB persistent post-mortem crash log page).
 extern uint8_t _crash_log_page[];
 
-// Provided by the linker script at 0x08008000 (1 KB persistent Lua bytecode page).
+// Provided by the linker script at 0x08008000 (4 KB persistent Lua bytecode region).
 extern uint8_t _lua_flash_page[];
+
+// Provided by the linker script at 0x08009000 (1 KB persistent config page).
+extern uint8_t _config_flash_page[];
 
 // Dedicated 256-byte fault recovery stack in low SRAM (.bss) so resetting MSP
 // in a fault handler never overwrites the pre-fault exception frame on the main stack.

@@ -765,7 +765,9 @@ static void send_lua_ack(uint8_t status) {
 }
 
 void lua_vm_init(uint32_t now_ticks) {
+    (void)now_ticks;
     s_enabled = false;
+    s_tick_coro.active = false;
     for (uint8_t i = 0U; i < LUA_MAX_GATES; i++) {
         s_gates[i].active = false;
     }
@@ -774,7 +776,6 @@ void lua_vm_init(uint32_t now_ticks) {
     } else {
         s_active_image = k_rom_script;
     }
-    reset_vm_state(now_ticks);
 }
 
 bool lua_vm_is_enabled(void) {
@@ -914,6 +915,7 @@ void lua_vm_handle_sysex(const uint8_t *msg, uint16_t len) {
                                                   s_active_image, total);
             if (ok) {
                 s_active_image = _lua_flash_page;
+                apc_mode_save_config();
             }
             send_lua_ack(ok ? 0x01U : 0x00U);
         }
@@ -923,13 +925,16 @@ void lua_vm_handle_sysex(const uint8_t *msg, uint16_t len) {
         bootloader_write_flash_page((uint32_t)(uintptr_t)_lua_flash_page, NULL, 0U);
         s_active_image = k_rom_script;
         clear_overlay_leds(now);
-        reset_vm_state(now);
+        if (s_enabled) {
+            reset_vm_state(now);
+        }
         send_lua_ack(0x01U);
         break;
 
     case LUA_SYSEX_CMD_ENABLE:
         if (len >= 8U) {
             lua_vm_set_enabled(msg[6] != 0U, now);
+            apc_mode_save_config();
             send_lua_ack(0x01U);
         }
         break;

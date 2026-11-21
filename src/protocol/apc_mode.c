@@ -1,11 +1,23 @@
 #include "apc_config.h"
 #include "apc_protocol.h"
 #include "apc_mode.h"
+#include "board.h"
+#include "bootloader.h"
 #include "leds.h"
 #include "lua_vm.h"
 #include "monome_mode.h"
 #include "sysex.h"
 #include "usb_midi.h"
+
+#define APC_CONFIG_MAGIC 0x41504331UL // "APC1"
+
+typedef struct {
+    uint32_t magic;
+    uint8_t mode_flags;
+    uint8_t palette;
+    uint8_t brightness;
+    uint8_t checksum;
+} apc_persist_cfg_t;
 
 static uint32_t s_rx_now_ticks = 0;
 static uint8_t s_mode_flags = APC_MODE_FLAGS_DEFAULT;
@@ -88,6 +100,49 @@ void apc_mode_init(void) {
         }
     }
     sysex_init();
+}
+
+void apc_mode_load_config(uint32_t now_ticks) {
+    const volatile apc_persist_cfg_t *cfg =
+        (const volatile apc_persist_cfg_t *)(uintptr_t)_config_flash_page;
+    uint8_t flags = cfg->mode_flags;
+    uint8_t pal = cfg->palette;
+    uint8_t bri = cfg->brightness;
+    if (cfg->magic != APC_CONFIG_MAGIC || flags > 0x0FU || pal >= 4U || bri >= 4U ||
+        cfg->checksum != (uint8_t)~(flags ^ pal ^ bri)) {
+        return;
+    }
+
+    monome_mode_set_palette(pal, now_ticks);
+    monome_mode_set_brightness(bri, now_ticks);
+    if ((board_reset_flags() & 0x20U) != 0U) {
+        // Safe mode after watchdog reset: keep saved config in Flash, skip Lua auto-start
+        flags &= (uint8_t)~APC_MODE_FLAG_LUA;
+    }
+    apc_mode_set_flags(flags, now_ticks);
+}
+
+void apc_mode_save_config(void) {
+    uint8_t flags = apc_mode_get_flags();
+    uint8_t pal = monome_mode_get_palette();
+    uint8_t bri = monome_mode_get_brightness();
+    uint8_t csum = (uint8_t)~(flags ^ pal ^ bri);
+    const volatile apc_persist_cfg_t *cur =
+        (const volatile apc_persist_cfg_t *)(uintptr_t)_config_flash_page;
+    if (cur->magic == APC_CONFIG_MAGIC && cur->mode_flags == flags && cur->palette == pal &&
+        cur->brightness == bri && cur->checksum == csum) {
+        return;
+    }
+
+    apc_persist_cfg_t next = {
+        .magic = APC_CONFIG_MAGIC,
+        .mode_flags = flags,
+        .palette = pal,
+        .brightness = bri,
+        .checksum = csum,
+    };
+    bootloader_write_flash_page((uint32_t)(uintptr_t)_config_flash_page, (const uint8_t *)&next,
+                                (uint16_t)sizeof(next));
 }
 
 uint8_t apc_mode_get_flags(void) {
