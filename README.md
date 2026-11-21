@@ -16,8 +16,7 @@ Since then, the firmware has grown to support simultaneous composite USB-MIDI + 
 - [x] Migrate to [libopencm3/libopencm3](https://github.com/libopencm3/libopencm3)
 - [x] [monome/serialosc](https://github.com/monome/serialosc) compatibility (simultaneous composite USB-MIDI + FTDI `mext` v4)
 - [x] Poor man's monome grid (on-chip Lua co-processor + browser Rust/WASM compiler)
-- [x] Improve visual feedback (varibright palettes, 4-step TM1629 brightness, non-destructive LED overlay)
-- [ ] Implement Mackie Control Universal (MCU)
+- [x] Improve visual feedback (varibright palettes, non-destructive LED overlay)
 
 ---
 
@@ -32,7 +31,7 @@ Run `make serve-web` (or open the GitHub Pages site in Chrome, Edge, Brave, or O
 
 ### Troubleshooting & Fallback
 
-If something goes wrong, you can flash **`v0.2.1`** from the **Uploader** page (or GitHub Releases) — it is just the fixed USB-MIDI firmware (soft reboot + smooth faders) without `serialosc` or the Lua VM. Please also grab your telemetry and crash log from **Config / Debug** (*Read Telemetry & Crash Log* → *Copy Markdown Report*, or `make debug` / `uv run fw_debug` from the CLI) and [open an issue on GitHub](https://github.com/cyrillsemenov/Open-APC-MINI/issues).
+If something goes wrong, you can flash **`v0.2.1`** from the **Uploader** page (or GitHub Releases) — it is just the fixed USB-MIDI firmware (soft reboot + smooth faders) without `serialosc` or the Lua VM. Please also grab your telemetry and crash log from **Config / Debug** (_Read Telemetry & Crash Log_ → _Copy Markdown Report_, or `make debug` / `uv run fw_debug` from the CLI) and [open an issue on GitHub](https://github.com/cyrillsemenov/Open-APC-MINI/issues).
 
 ---
 
@@ -76,13 +75,13 @@ end
 
 Scripts define up to five top-level callback functions (custom helper functions are not supported):
 
-| Callback | Description |
-| :--- | :--- |
-| `init()` | Runs once on upload, reset, or VM enable (top-level statements also act as init if `init()` is omitted). |
-| `on_tick(step)` | Cooperative coroutine called every tempo tick (`step` increments `0, 1, 2...`). Alias: `tick`. |
-| `on_grid(x, y, z)` | Pad press (`z = 1`) / release (`z = 0`), `x, y = 0..7`. Return `1` to consume the event, or `0` to pass through to MIDI / `serialosc`. Aliases: `g.key`, `grid_key`. |
-| `on_fader(idx, val, hires)` | Fader moved: `idx = 0..8` (`8` = Master), `val = 0..127` (7-bit), `hires = 0..16383` (14-bit). Alias: `fader_move`. |
-| `on_button(group, idx, z)` | Round & Shift buttons: `group = 1` Track 1..8 (`idx = 0..7`), `group = 2` Scene 1..8 (`idx = 0..7`), `group = 3` SHIFT (`idx = 0`). Return `1` to consume. Alias: `button`. |
+| Callback                    | Description                                                                                                                                                                 |
+| :-------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `init()`                    | Runs once on upload, reset, or VM enable (top-level statements also act as init if `init()` is omitted).                                                                    |
+| `on_tick(step)`             | Cooperative coroutine called every tempo tick (`step` increments `0, 1, 2...`). Alias: `tick`.                                                                              |
+| `on_grid(x, y, z)`          | Pad press (`z = 1`) / release (`z = 0`), `x, y = 0..7`. Return `1` to consume the event, or `0` to pass through to MIDI / `serialosc`. Aliases: `g.key`, `grid_key`.        |
+| `on_fader(idx, val, hires)` | Fader moved: `idx = 0..8` (`8` = Master), `val = 0..127` (7-bit), `hires = 0..16383` (14-bit). Alias: `fader_move`.                                                         |
+| `on_button(group, idx, z)`  | Round & Shift buttons: `group = 1` Track 1..8 (`idx = 0..7`), `group = 2` Scene 1..8 (`idx = 0..7`), `group = 3` SHIFT (`idx = 0`). Return `1` to consume. Alias: `button`. |
 
 ### Coordinates & LEDs
 
@@ -93,27 +92,27 @@ Scripts define up to five top-level callback functions (custom helper functions 
 
 ### Built-in Functions
 
-| Function | Description |
-| :--- | :--- |
-| `led(x, y, val)` | Set grid pad overlay (`0..16`) or round LED (`y=8` Track, `x=8` Scene). Aliases: `g:led`, `g.led`. |
-| `led_all(val)` | Fill all 64 pad overlays with `val` (`0..16`). Aliases: `g:all`, `g.all`. |
-| `host_led(x, y)` | Read host LED level (`0..16`) underneath from `serialosc` or MIDI. |
-| `refresh()` | No-op accepted for Monome grid script compatibility (`g:refresh`, `g.refresh`). |
-| `note_on(ch, note, vel)` | Send USB-MIDI Note On (`ch 0..15`, `note/vel 0..127`); also emits `serialosc` key if `note < 64`. |
-| `note_off(ch, note)` | Send USB-MIDI Note Off (and `serialosc` key-up if `note < 64`). |
-| `cc(ch, num, val)` | Send 7-bit USB-MIDI Control Change (`0..127`). |
-| `cc14(ch, cc, val14)` | Send 14-bit MSB+LSB MIDI CC pair (`cc = 0..31`, `val14 = 0..16383`). |
-| `pitch_bend(ch, val14)` | Send 14-bit USB-MIDI Pitch Bend (`0..16383`). |
-| `grid_key(x, y, z)` | Emit synthetic key down (`z=1`) / up (`z=0`) to MIDI and `serialosc`. Aliases: `trigger_key`, `mext_key`. |
-| `key_pulse(x, y, ms)` | Non-blocking key down + automatic key up after `ms` (up to `4000`, 8 concurrent gates). |
-| `tilt(sensor, x, y, z)` | Send Monome `mext` tilt packet (`sensor = 0..3`). Alias: `mext_tilt`. |
-| `fader(idx)` / `fader_hires(idx)` | Read fader `0..8` as 7-bit (`0..127`) or 14-bit (`0..16383`; alias `fader14`). |
-| `shift()` | Returns `1` while SHIFT is held, else `0`. |
-| `set_tempo(ms)` | Set `on_tick` period in ms (clamped `10..2000`, default `55`). |
-| `yield()` / `sleep_ms(ms)` | Suspend `on_tick` coroutine until next loop turn or for `ms` (up to `4000`). |
-| `rand(max)` | Pseudo-random integer in `0 .. max - 1`. Alias: `math.random`. |
-| `abs(x)`, `min(a, b)`, `max(a, b)` | Integer math helpers (also under `math.*`). |
-| `life_step()` | Fast C-accelerated 8×8 toroidal Game of Life step from `mem[0..63]` + `host_led` into `mem[64..127]`; returns alive count. |
+| Function                           | Description                                                                                                                |
+| :--------------------------------- | :------------------------------------------------------------------------------------------------------------------------- |
+| `led(x, y, val)`                   | Set grid pad overlay (`0..16`) or round LED (`y=8` Track, `x=8` Scene). Aliases: `g:led`, `g.led`.                         |
+| `led_all(val)`                     | Fill all 64 pad overlays with `val` (`0..16`). Aliases: `g:all`, `g.all`.                                                  |
+| `host_led(x, y)`                   | Read host LED level (`0..16`) underneath from `serialosc` or MIDI.                                                         |
+| `refresh()`                        | No-op accepted for Monome grid script compatibility (`g:refresh`, `g.refresh`).                                            |
+| `note_on(ch, note, vel)`           | Send USB-MIDI Note On (`ch 0..15`, `note/vel 0..127`); also emits `serialosc` key if `note < 64`.                          |
+| `note_off(ch, note)`               | Send USB-MIDI Note Off (and `serialosc` key-up if `note < 64`).                                                            |
+| `cc(ch, num, val)`                 | Send 7-bit USB-MIDI Control Change (`0..127`).                                                                             |
+| `cc14(ch, cc, val14)`              | Send 14-bit MSB+LSB MIDI CC pair (`cc = 0..31`, `val14 = 0..16383`).                                                       |
+| `pitch_bend(ch, val14)`            | Send 14-bit USB-MIDI Pitch Bend (`0..16383`).                                                                              |
+| `grid_key(x, y, z)`                | Emit synthetic key down (`z=1`) / up (`z=0`) to MIDI and `serialosc`. Aliases: `trigger_key`, `mext_key`.                  |
+| `key_pulse(x, y, ms)`              | Non-blocking key down + automatic key up after `ms` (up to `4000`, 8 concurrent gates).                                    |
+| `tilt(sensor, x, y, z)`            | Send Monome `mext` tilt packet (`sensor = 0..3`). Alias: `mext_tilt`.                                                      |
+| `fader(idx)` / `fader_hires(idx)`  | Read fader `0..8` as 7-bit (`0..127`) or 14-bit (`0..16383`; alias `fader14`).                                             |
+| `shift()`                          | Returns `1` while SHIFT is held, else `0`.                                                                                 |
+| `set_tempo(ms)`                    | Set `on_tick` period in ms (clamped `10..2000`, default `55`).                                                             |
+| `yield()` / `sleep_ms(ms)`         | Suspend `on_tick` coroutine until next loop turn or for `ms` (up to `4000`).                                               |
+| `rand(max)`                        | Pseudo-random integer in `0 .. max - 1`. Alias: `math.random`.                                                             |
+| `abs(x)`, `min(a, b)`, `max(a, b)` | Integer math helpers (also under `math.*`).                                                                                |
+| `life_step()`                      | Fast C-accelerated 8×8 toroidal Game of Life step from `mem[0..63]` + `host_led` into `mem[64..127]`; returns alive count. |
 
 ### Language Subset & VM Limits
 
