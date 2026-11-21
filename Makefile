@@ -65,7 +65,7 @@ DEFINES := \
 CFLAGS := \
 	-mcpu=cortex-m3 \
 	-mthumb \
-	-Os \
+	-Oz \
 	-g \
 	-std=c11 \
 	-Wall \
@@ -140,11 +140,13 @@ endif
 sysex: $(APP_SYX)
 
 $(OPENCM3_LIB):
-	$(MAKE) -C $(OPENCM3_DIR) TARGETS=stm32/f1 PREFIX="$(CROSS_COMPILE)"
+	$(MAKE) -C $(OPENCM3_DIR) TARGETS=stm32/f1 PREFIX="$(CROSS_COMPILE)" CFLAGS="-Oz"
 
 $(BUILD_DIR)/obj/%.o: src/%.c | $(OPENCM3_LIB)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(EXTRA_CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/obj/protocol/lua_vm.o: EXTRA_CFLAGS := -O2
 
 $(TARGET_ELF): $(OBJS) $(EXTRA_OBJS) $(OPENCM3_LIB) $(LDSCRIPT)
 	$(CC) $(OBJS) $(EXTRA_OBJS) $(LDFLAGS) $(EXTRA_LDFLAGS) -o $@ $(LDLIBS)

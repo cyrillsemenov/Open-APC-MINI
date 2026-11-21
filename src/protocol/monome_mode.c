@@ -175,40 +175,47 @@ void monome_mode_set_brightness(uint8_t bright_idx, uint32_t now_ticks) {
     leds_set_brightness(k_bright_levels[s_bright_idx], now_ticks);
 }
 
+static const uint8_t k_mext_cmd_len[29] = {
+    0U,    0U,    32U,   0U,    2U,    0U,    0xFFU, 0xFFU, 0U,
+    0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
+    2U,    2U,    0U,    0U,    10U,   3U,    3U,    1U,    3U,    1U,    34U,   5U,    5U,
+};
+
 static uint8_t cmd_payload_len(uint8_t cmd) {
-    switch (cmd) {
-    case MEXT_CMD_SYS_QUERY:
-    case MEXT_CMD_SYS_GET_ID:
-    case MEXT_CMD_SYS_GET_SIZE:
-    case MEXT_CMD_SYS_GET_ADDR:
-    case MEXT_CMD_SYS_GET_VER:
-    case MEXT_CMD_LED_ALL_OFF:
-    case MEXT_CMD_LED_ALL_ON:
-        return 0U;
-    case MEXT_CMD_LED_INTENSITY:
-    case MEXT_CMD_LED_LEVEL_ALL:
-    case MEXT_CMD_TILT_DISABLE:
-    case MEXT_CMD_TILT_ENABLE:
+    if (cmd < sizeof(k_mext_cmd_len)) {
+        return k_mext_cmd_len[cmd];
+    }
+    if (cmd == MEXT_CMD_TILT_DISABLE || cmd == MEXT_CMD_TILT_ENABLE) {
         return 1U;
-    case MEXT_CMD_SYS_SET_SIZE:
-    case MEXT_CMD_LED_OFF:
-    case MEXT_CMD_LED_ON:
-        return 2U;
-    case MEXT_CMD_LED_ROW:
-    case MEXT_CMD_LED_COL:
-    case MEXT_CMD_LED_LEVEL_SET:
-        return 3U;
-    case MEXT_CMD_LED_LEVEL_ROW:
-    case MEXT_CMD_LED_LEVEL_COL:
-        return 5U;
-    case MEXT_CMD_LED_MAP:
-        return 10U;
-    case MEXT_CMD_SYS_SET_ID:
-        return 32U;
-    case MEXT_CMD_LED_LEVEL_MAP:
-        return 34U;
-    default:
-        return 0xFFU;
+    }
+    return 0xFFU;
+}
+
+static void fill_grid_pads(uint8_t lvl, uint32_t now_ticks) {
+    for (uint8_t y = 0; y < 8U; y++) {
+        for (uint8_t x = 0; x < 8U; x++) {
+            set_grid_pad_level(x, y, lvl, now_ticks);
+        }
+    }
+}
+
+static void set_grid_line_1bit(uint8_t fixed, uint8_t mask, bool is_col, uint32_t now_ticks) {
+    for (uint8_t i = 0; i < 8U; i++) {
+        uint8_t lvl = ((mask & (1U << i)) != 0U) ? MONOME_LVL_1BIT_ON : 0U;
+        set_grid_pad_level(is_col ? fixed : i, is_col ? i : fixed, lvl, now_ticks);
+    }
+}
+
+static void set_grid_line_nibbles(uint8_t fixed, const uint8_t *bytes, bool is_col,
+                                  uint32_t now_ticks) {
+    for (uint8_t i = 0; i < 4U; i++) {
+        uint8_t pos = (uint8_t)(i << 1U);
+        uint8_t byte = bytes[i];
+        uint8_t hi = (uint8_t)((byte >> 4U) & 0x0FU);
+        uint8_t lo = (uint8_t)(byte & 0x0FU);
+        set_grid_pad_level(is_col ? fixed : pos, is_col ? pos : fixed, hi, now_ticks);
+        set_grid_pad_level(is_col ? fixed : (uint8_t)(pos + 1U),
+                           is_col ? (uint8_t)(pos + 1U) : fixed, lo, now_ticks);
     }
 }
 
@@ -272,52 +279,30 @@ static void execute_mext_cmd(uint8_t cmd, const uint8_t *p, uint32_t now_ticks) 
         break;
 
     case MEXT_CMD_LED_ALL_OFF:
-        for (uint8_t y = 0; y < 8U; y++) {
-            for (uint8_t x = 0; x < 8U; x++) {
-                set_grid_pad_level(x, y, 0U, now_ticks);
-            }
-        }
+        fill_grid_pads(0U, now_ticks);
         break;
 
     case MEXT_CMD_LED_ALL_ON:
-        for (uint8_t y = 0; y < 8U; y++) {
-            for (uint8_t x = 0; x < 8U; x++) {
-                set_grid_pad_level(x, y, MONOME_LVL_1BIT_ON, now_ticks);
-            }
-        }
+        fill_grid_pads(MONOME_LVL_1BIT_ON, now_ticks);
         break;
 
     case MEXT_CMD_LED_MAP:
         if (p[0] == 0U && p[1] == 0U) {
             for (uint8_t y = 0; y < 8U; y++) {
-                uint8_t row_mask = p[2U + y];
-                for (uint8_t x = 0; x < 8U; x++) {
-                    uint8_t lvl = ((row_mask & (1U << x)) != 0U) ? MONOME_LVL_1BIT_ON : 0U;
-                    set_grid_pad_level(x, y, lvl, now_ticks);
-                }
+                set_grid_line_1bit(y, p[2U + y], false, now_ticks);
             }
         }
         break;
 
     case MEXT_CMD_LED_ROW:
         if (p[0] == 0U && p[1] < 8U) {
-            uint8_t y = p[1];
-            uint8_t mask = p[2];
-            for (uint8_t x = 0; x < 8U; x++) {
-                uint8_t lvl = ((mask & (1U << x)) != 0U) ? MONOME_LVL_1BIT_ON : 0U;
-                set_grid_pad_level(x, y, lvl, now_ticks);
-            }
+            set_grid_line_1bit(p[1], p[2], false, now_ticks);
         }
         break;
 
     case MEXT_CMD_LED_COL:
         if (p[0] < 8U && p[1] == 0U) {
-            uint8_t x = p[0];
-            uint8_t mask = p[2];
-            for (uint8_t y = 0; y < 8U; y++) {
-                uint8_t lvl = ((mask & (1U << y)) != 0U) ? MONOME_LVL_1BIT_ON : 0U;
-                set_grid_pad_level(x, y, lvl, now_ticks);
-            }
+            set_grid_line_1bit(p[0], p[2], true, now_ticks);
         }
         break;
 
@@ -329,49 +314,27 @@ static void execute_mext_cmd(uint8_t cmd, const uint8_t *p, uint32_t now_ticks) 
         set_grid_pad_level(p[0], p[1], (uint8_t)(p[2] & 0x0FU), now_ticks);
         break;
 
-    case MEXT_CMD_LED_LEVEL_ALL: {
-        uint8_t lvl = (uint8_t)(p[0] & 0x0FU);
-        for (uint8_t y = 0; y < 8U; y++) {
-            for (uint8_t x = 0; x < 8U; x++) {
-                set_grid_pad_level(x, y, lvl, now_ticks);
-            }
-        }
+    case MEXT_CMD_LED_LEVEL_ALL:
+        fill_grid_pads((uint8_t)(p[0] & 0x0FU), now_ticks);
         break;
-    }
 
     case MEXT_CMD_LED_LEVEL_MAP:
         if (p[0] == 0U && p[1] == 0U) {
-            for (uint8_t i = 0; i < 32U; i++) {
-                uint8_t y = (uint8_t)(i >> 2U);
-                uint8_t x0 = (uint8_t)((i & 3U) << 1U);
-                uint8_t byte = p[2U + i];
-                set_grid_pad_level(x0, y, (uint8_t)((byte >> 4U) & 0x0FU), now_ticks);
-                set_grid_pad_level((uint8_t)(x0 + 1U), y, (uint8_t)(byte & 0x0FU), now_ticks);
+            for (uint8_t y = 0; y < 8U; y++) {
+                set_grid_line_nibbles(y, &p[2U + (y * 4U)], false, now_ticks);
             }
         }
         break;
 
     case MEXT_CMD_LED_LEVEL_ROW:
         if (p[0] == 0U && p[1] < 8U) {
-            uint8_t y = p[1];
-            for (uint8_t i = 0; i < 4U; i++) {
-                uint8_t x0 = (uint8_t)(i << 1U);
-                uint8_t byte = p[2U + i];
-                set_grid_pad_level(x0, y, (uint8_t)((byte >> 4U) & 0x0FU), now_ticks);
-                set_grid_pad_level((uint8_t)(x0 + 1U), y, (uint8_t)(byte & 0x0FU), now_ticks);
-            }
+            set_grid_line_nibbles(p[1], &p[2], false, now_ticks);
         }
         break;
 
     case MEXT_CMD_LED_LEVEL_COL:
         if (p[0] < 8U && p[1] == 0U) {
-            uint8_t x = p[0];
-            for (uint8_t i = 0; i < 4U; i++) {
-                uint8_t y0 = (uint8_t)(i << 1U);
-                uint8_t byte = p[2U + i];
-                set_grid_pad_level(x, y0, (uint8_t)((byte >> 4U) & 0x0FU), now_ticks);
-                set_grid_pad_level(x, (uint8_t)(y0 + 1U), (uint8_t)(byte & 0x0FU), now_ticks);
-            }
+            set_grid_line_nibbles(p[0], &p[2], true, now_ticks);
         }
         break;
 

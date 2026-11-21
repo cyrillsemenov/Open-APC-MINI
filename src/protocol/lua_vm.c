@@ -15,7 +15,7 @@
 #include "usb_midi.h"
 
 #define LUA_MAX_STEPS   131072UL
-#define LUA_SLICE_STEPS 256U
+#define LUA_SLICE_STEPS 128U
 #define LUA_STACK_SIZE  64U
 #define LUA_NUM_LOCALS  64U
 #define LUA_NUM_GLOBALS 64U
@@ -191,8 +191,9 @@ static void schedule_key_pulse(uint8_t x, uint8_t y, int32_t ms, uint32_t now_ti
     s_gates[victim].off_tick = off_tick;
 }
 
-static int32_t call_builtin(lua_coro_t *c, uint8_t fn_id, uint8_t argc, const int32_t *args,
-                            uint32_t now_ticks, bool *out_yielded) {
+__attribute__((noinline)) static int32_t call_builtin(lua_coro_t *c, uint8_t fn_id, uint8_t argc,
+                                                  const int32_t *args, uint32_t now_ticks,
+                                                  bool *out_yielded) {
     (void)argc;
     switch (fn_id) {
     case LUA_FN_LED: {
@@ -335,37 +336,29 @@ static int32_t call_builtin(lua_coro_t *c, uint8_t fn_id, uint8_t argc, const in
         if (x < 0 || x >= 8 || y < 0 || y >= 8) {
             return 0;
         }
-        if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
-            return (int32_t)monome_mode_get_host_led((uint8_t)x, (uint8_t)y);
-        }
-        return (int32_t)apc_mode_get_host_led((uint8_t)x, (uint8_t)y);
+        return (int32_t)monome_mode_get_host_led((uint8_t)x, (uint8_t)y);
     }
 
     case LUA_FN_LIFE_STEP: {
         int32_t alive_cnt = 0;
-        bool is_monome = (usb_get_profile() == USB_PROFILE_MONOME_FTDI);
         for (uint8_t y = 0U; y < 8U; y++) {
-            uint8_t ym = (uint8_t)(((y - 1U) & 7U) << 3U);
-            uint8_t y0 = (uint8_t)(y << 3U);
-            uint8_t yp = (uint8_t)(((y + 1U) & 7U) << 3U);
             for (uint8_t x = 0U; x < 8U; x++) {
-                uint8_t xm = (uint8_t)((x - 1U) & 7U);
-                uint8_t xp = (uint8_t)((x + 1U) & 7U);
                 uint8_t n = 0U;
-                if (s_mem[ym + xm] > 0) n++;
-                if (s_mem[ym + x] > 0)  n++;
-                if (s_mem[ym + xp] > 0) n++;
-                if (s_mem[y0 + xm] > 0) n++;
-                if (s_mem[y0 + xp] > 0) n++;
-                if (s_mem[yp + xm] > 0) n++;
-                if (s_mem[yp + x] > 0)  n++;
-                if (s_mem[yp + xp] > 0) n++;
-                uint8_t hled = is_monome ? monome_mode_get_host_led(x, y)
-                                         : apc_mode_get_host_led(x, y);
-                if (hled > 0U) {
+                for (int8_t dy = -1; dy <= 1; dy++) {
+                    uint8_t ry = (uint8_t)(((y + dy) & 7) << 3);
+                    for (int8_t dx = -1; dx <= 1; dx++) {
+                        if (s_mem[ry + (uint8_t)((x + dx) & 7)] > 0) {
+                            n++;
+                        }
+                    }
+                }
+                uint8_t idx = (uint8_t)((y << 3U) + x);
+                if (s_mem[idx] > 0) {
+                    n--;
+                }
+                if (monome_mode_get_host_led(x, y) > 0U) {
                     n++;
                 }
-                uint8_t idx = (uint8_t)(y0 + x);
                 int16_t next_st = 0;
                 if (s_mem[idx] > 0) {
                     if (n == 2U || n == 3U) {
@@ -491,19 +484,22 @@ static void step_coro(lua_coro_t *c, uint16_t slice_budget, uint32_t now_ticks) 
     uint16_t pc = c->pc;
     uint8_t sp = c->sp;
     uint16_t slice_steps = 0U;
+    uint32_t rem = (c->total_steps < LUA_MAX_STEPS) ? (LUA_MAX_STEPS - c->total_steps) : 0UL;
+    uint16_t budget = (rem < (uint32_t)slice_budget) ? (uint16_t)rem : slice_budget;
 
-    while (pc < code_len && slice_steps < slice_budget && c->total_steps < LUA_MAX_STEPS) {
+    while (pc < code_len && slice_steps < budget) {
         slice_steps++;
-        c->total_steps++;
         uint8_t op = code[pc++];
 
         switch (op) {
         case LUA_OP_HALT:
+            c->total_steps += slice_steps;
             c->active = false;
             c->ret_val = 0;
             return;
 
         case LUA_OP_RET:
+            c->total_steps += slice_steps;
             c->active = false;
             c->ret_val = (sp > 0U) ? c->stack[--sp] : 0;
             return;
@@ -707,6 +703,7 @@ static void step_coro(lua_coro_t *c, uint16_t slice_budget, uint32_t now_ticks) 
                     c->stack[sp++] = res;
                 }
                 if (yielded) {
+                    c->total_steps += slice_steps;
                     c->pc = pc;
                     c->sp = sp;
                     return;
@@ -715,11 +712,13 @@ static void step_coro(lua_coro_t *c, uint16_t slice_budget, uint32_t now_ticks) 
             break;
 
         default:
+            c->total_steps += slice_steps;
             c->active = false;
             return;
         }
     }
 
+    c->total_steps += slice_steps;
     if (pc >= code_len || c->total_steps >= LUA_MAX_STEPS) {
         c->active = false;
     } else {
@@ -762,11 +761,7 @@ static void send_lua_ack(uint8_t status) {
         MIDI_STATUS_SYSEX_START, 0x7DU, 'L', 'U', 'A', LUA_SYSEX_CMD_ACK, status & 0x7FU,
         MIDI_STATUS_SYSEX_END,
     };
-    if (usb_get_profile() == USB_PROFILE_MONOME_FTDI) {
-        usb_serial_write(ack, sizeof(ack));
-    } else {
-        usb_midi_send_sysex(ack, sizeof(ack));
-    }
+    usb_serial_write(ack, sizeof(ack));
 }
 
 void lua_vm_init(uint32_t now_ticks) {

@@ -103,15 +103,15 @@ def encode_addr_nibbles(addr: int) -> list[int]:
 def decode_reset_flags(flags: int) -> list[str]:
     causes: list[str] = []
     if flags & 0x04:
-        causes.append("IWDGRST (Independent Watchdog Timeout!)")
+        causes.append("PINRST (NRST Pin Reset)")
     if flags & 0x08:
-        causes.append("WWDGRST (Window Watchdog Timeout)")
+        causes.append("PORRST (Power-On / Power-Down Reset)")
     if flags & 0x10:
         causes.append("SFTRST (Software Reset / DFU Reboot)")
     if flags & 0x20:
-        causes.append("PORRST (Power-On / Power-Down Reset)")
+        causes.append("IWDGRST (Independent Watchdog Timeout!)")
     if flags & 0x40:
-        causes.append("PINRST (NRST Pin Reset)")
+        causes.append("WWDGRST (Window Watchdog Timeout)")
     if flags & 0x80:
         causes.append("LPWRRST (Low-Power Reset)")
     return causes or [f"NONE (0x{flags:02X})"]

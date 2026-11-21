@@ -315,6 +315,48 @@ async function enterAndUnlockBootloader() {
   );
 }
 
+async function sendStepWithRetry(outPort, inPort, step) {
+  const timeoutMs =
+    step.kind === "flash_write" || step.kind === "finalize" ? 5000 : 1500;
+  const maxAttempts =
+    step.kind === "ram_load" || step.kind === "flash_write" ? 5 : 1;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const ack = await session.sendAndWaitAck(
+        outPort,
+        inPort,
+        step.sysex,
+        timeoutMs,
+        {
+          ignoreUnlockAck: true,
+        },
+      );
+      if (
+        ack === step.expectedAck ||
+        step.kind !== "ram_load" ||
+        attempt + 1 >= maxAttempts
+      ) {
+        return ack;
+      }
+    } catch (err) {
+      if (attempt + 1 >= maxAttempts) {
+        throw err;
+      }
+    }
+
+    session.log(
+      `MIDI collision / timeout on page ${(step.pageIdx ?? 0) + 1} (attempt ${attempt + 1}/${maxAttempts}), re-syncing bootloader (0x3E)...`,
+      "warn",
+    );
+    await sleep(400);
+    await session
+      .sendAndWaitAck(outPort, inPort, UNLOCK_SYSEX, 1500)
+      .catch(() => {});
+    await sleep(100);
+  }
+}
+
 async function flashCurrentBundle() {
   if (!activeBundle || session.isBusy()) return;
   session.setBusy(true);
@@ -345,17 +387,7 @@ async function flashCurrentBundle() {
         );
       }
 
-      const timeoutMs =
-        step.kind === "flash_write" || step.kind === "finalize" ? 5000 : 3000;
-      const ack = await session.sendAndWaitAck(
-        outPort,
-        inPort,
-        step.sysex,
-        timeoutMs,
-        {
-          ignoreUnlockAck: true,
-        },
-      );
+      const ack = await sendStepWithRetry(outPort, inPort, step);
 
       if (ack !== step.expectedAck) {
         const hexAck = `0x${ack.toString(16).toUpperCase().padStart(2, "0")}`;

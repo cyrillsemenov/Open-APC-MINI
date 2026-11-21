@@ -3,6 +3,8 @@
 import argparse
 import glob
 import os
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -72,7 +74,11 @@ def open_apc_midi_ports(port_filter: str, timeout_s: float = 8.0, prefer_bootloa
 
 
 def send_and_wait_ack(
-    out_port, in_port, msg: mido.Message, timeout_s: float = 3.0
+    out_port,
+    in_port,
+    msg: mido.Message,
+    timeout_s: float = 3.0,
+    ignore_unlock_ack: bool = False,
 ) -> int:
     """
     Sends a SysEx message via system MIDI and waits for the 1-byte status SysEx reply
@@ -87,7 +93,10 @@ def send_and_wait_ack(
     while time.monotonic() < deadline:
         for rx_msg in in_port.iter_pending():
             if rx_msg.type == "sysex" and len(rx_msg.data) >= 1:
-                return rx_msg.data[0]
+                code = rx_msg.data[0]
+                if ignore_unlock_ack and code == ACK_BL_UNLOCK:
+                    continue
+                return code
         time.sleep(0.001)
 
     raise TimeoutError("Timed out waiting for SysEx ACK from APC Mini.")
@@ -113,18 +122,45 @@ def try_serial_dfu_unlock() -> bool:
     return False
 
 
+def wait_for_bootloader_unlock(port_filter: str):
+    """Polls until the USB-MIDI bootloader enumerates and answers UNLOCK with 0x3E."""
+    unlock_msg = raw_sysex_to_mido(UNLOCK_SYSEX)
+    deadline = time.monotonic() + 15.0
+    while time.monotonic() < deadline:
+        try:
+            out_port, in_port = open_apc_midi_ports(
+                port_filter, timeout_s=2.0, prefer_bootloader=True
+            )
+            code = send_and_wait_ack(out_port, in_port, unlock_msg, timeout_s=1.5)
+            if code == ACK_BL_UNLOCK:
+                print("Bootloader unlocked (ACK 0x3E).")
+                time.sleep(0.25)
+                return out_port, in_port
+            out_port.close()
+            in_port.close()
+        except Exception:
+            pass
+        time.sleep(0.5)
+
+    raise RuntimeError(
+        "Timed out waiting for APC Mini to enter bootloader mode (0x3E)."
+    )
+
+
 def enter_and_unlock_bootloader(port_filter: str):
     """Unlocks via system MIDI from either the running App (0x15), Monome FTDI/OSC, or Bootloader (0x3E)."""
     try:
         out_port, in_port = open_apc_midi_ports(port_filter, timeout_s=1.5)
     except RuntimeError:
         try_serial_dfu_unlock()
-        out_port, in_port = open_apc_midi_ports(port_filter, timeout_s=8.0, prefer_bootloader=True)
+        return wait_for_bootloader_unlock(port_filter)
+
     unlock_msg = raw_sysex_to_mido(UNLOCK_SYSEX)
     code = send_and_wait_ack(out_port, in_port, unlock_msg)
 
     if code == ACK_BL_UNLOCK:
         print("Bootloader already active and unlocked (ACK 0x3E).")
+        time.sleep(0.1)
         return out_port, in_port
 
     if code == ACK_APP_UNLOCK:
@@ -133,44 +169,60 @@ def enter_and_unlock_bootloader(port_filter: str):
         )
         out_port.close()
         in_port.close()
-        time.sleep(2.0)
-
-        # Poll until device comes back in bootloader mode and replies 0x3E
-        deadline = time.monotonic() + 15.0
-        while time.monotonic() < deadline:
-            try:
-                out_port, in_port = open_apc_midi_ports(
-                    port_filter, timeout_s=2.0, prefer_bootloader=True
-                )
-                code = send_and_wait_ack(out_port, in_port, unlock_msg, timeout_s=1.5)
-                if code == ACK_BL_UNLOCK:
-                    print("Bootloader unlocked (ACK 0x3E).")
-                    return out_port, in_port
-                out_port.close()
-                in_port.close()
-            except Exception:
-                pass
-            time.sleep(0.5)
-
-        raise RuntimeError(
-            "Timed out waiting for APC Mini to enter bootloader mode (0x3E)."
-        )
+        time.sleep(2.5)
+        return wait_for_bootloader_unlock(port_filter)
 
     raise RuntimeError(f"Unexpected unlock ACK code: 0x{code:02X}")
 
 
-def flash_steps(steps: list[SysexStep], port_filter: str) -> None:
-    num_pages = sum(1 for s in steps if s.kind == "flash_write")
-    out_port, in_port = enter_and_unlock_bootloader(port_filter)
+def _send_step_with_retry(
+    out_port, in_port, step: SysexStep, port_filter: str
+) -> tuple[int, object, object]:
+    timeout_s = 5.0 if step.kind in ("flash_write", "finalize") else 1.5
+    max_attempts = 5 if step.kind in ("ram_load", "flash_write") else 1
+    msg = raw_sysex_to_mido(step.sysex)
+    unlock_msg = raw_sysex_to_mido(UNLOCK_SYSEX)
+    for attempt in range(max_attempts):
+        try:
+            ack = send_and_wait_ack(
+                out_port, in_port, msg, timeout_s=timeout_s, ignore_unlock_ack=True
+            )
+            if ack == step.expected_ack or step.kind != "ram_load" or attempt + 1 >= max_attempts:
+                return ack, out_port, in_port
+        except TimeoutError:
+            if attempt + 1 >= max_attempts:
+                raise
 
+        # Background DAW probes (e.g. Ableton Live / REAPER) can collide right after USB
+        # enumeration; let the probe burst settle, reopen ports if needed, and re-sync 0x3E.
+        time.sleep(0.4)
+        for _ in in_port.iter_pending():
+            pass
+        if attempt >= 2:
+            out_port.close()
+            in_port.close()
+            out_port, in_port = open_apc_midi_ports(
+                port_filter, timeout_s=4.0, prefer_bootloader=True
+            )
+        try:
+            send_and_wait_ack(out_port, in_port, unlock_msg, timeout_s=1.5)
+        except Exception:
+            pass
+        time.sleep(0.1)
+    raise AssertionError("unreachable")
+
+
+def flash_steps_on_ports(
+    steps: list[SysexStep], out_port, in_port, port_filter: str
+) -> None:
+    num_pages = sum(1 for s in steps if s.kind == "flash_write")
     try:
         for step in steps:
             if step.kind == "finalize":
                 print("\nVerifying checksum & rebooting into application...")
 
-            timeout_s = 5.0 if step.kind in ("flash_write", "finalize") else 3.0
-            ack = send_and_wait_ack(
-                out_port, in_port, raw_sysex_to_mido(step.sysex), timeout_s=timeout_s
+            ack, out_port, in_port = _send_step_with_retry(
+                out_port, in_port, step, port_filter
             )
             if ack != step.expected_ack:
                 if step.kind == "ram_load":
@@ -203,8 +255,32 @@ def flash_steps(steps: list[SysexStep], port_filter: str) -> None:
         in_port.close()
 
 
+def flash_steps(steps: list[SysexStep], port_filter: str) -> None:
+    out_port, in_port = enter_and_unlock_bootloader(port_filter)
+    flash_steps_on_ports(steps, out_port, in_port, port_filter)
+
+
 def flash_firmware(fw_bytes: bytes, port_filter: str) -> None:
     flash_steps(encode_firmware_steps(fw_bytes), port_filter)
+
+
+def _spawn_bootloader_flasher(firmware: Path, port_filter: str) -> None:
+    # Spawn a fresh Python process so macOS CoreMIDI/python-rtmidi creates a clean
+    # client after USB disconnect/re-enumeration instead of holding stale endpoints.
+    res = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "tools.fw_updater",
+            "--wait-bootloader",
+            str(firmware),
+            "-p",
+            port_filter,
+        ],
+        check=False,
+    )
+    if res.returncode != 0:
+        raise SystemExit(res.returncode)
 
 
 def main() -> None:
@@ -221,10 +297,49 @@ def main() -> None:
     parser.add_argument(
         "-p", "--port", default="APC", help="MIDI port name substring (default: 'APC')"
     )
+    parser.add_argument(
+        "--wait-bootloader",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
     args = parser.parse_args()
 
     steps = load_firmware_steps(args.firmware)
-    flash_steps(steps, args.port)
+    if args.wait_bootloader:
+        out_port, in_port = wait_for_bootloader_unlock(args.port)
+        flash_steps_on_ports(steps, out_port, in_port, args.port)
+        return
+
+    try:
+        out_port, in_port = open_apc_midi_ports(args.port, timeout_s=1.5)
+    except RuntimeError:
+        try_serial_dfu_unlock()
+        time.sleep(1.5)
+        _spawn_bootloader_flasher(args.firmware, args.port)
+        return
+
+    unlock_msg = raw_sysex_to_mido(UNLOCK_SYSEX)
+    code = send_and_wait_ack(out_port, in_port, unlock_msg)
+
+    if code == ACK_BL_UNLOCK:
+        print("Bootloader already active and unlocked (ACK 0x3E).")
+        time.sleep(0.1)
+        flash_steps_on_ports(steps, out_port, in_port, args.port)
+        return
+
+    if code == ACK_APP_UNLOCK:
+        print(
+            "Application accepted unlock (ACK 0x15). Waiting for USB-MIDI bootloader re-enumeration..."
+        )
+        out_port.close()
+        in_port.close()
+        time.sleep(2.5)
+        _spawn_bootloader_flasher(args.firmware, args.port)
+        return
+
+    out_port.close()
+    in_port.close()
+    raise RuntimeError(f"Unexpected unlock ACK code: 0x{code:02X}")
 
 
 if __name__ == "__main__":

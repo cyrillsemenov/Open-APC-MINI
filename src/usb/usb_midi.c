@@ -1,6 +1,5 @@
 #include <stddef.h>
 #include <libopencm3/cm3/nvic.h>
-#include <libopencm3/stm32/iwdg.h>
 #include <libopencm3/stm32/rcc.h>
 #include <libopencm3/stm32/st_usbfs.h>
 #include <libopencm3/usb/usbd.h>
@@ -35,7 +34,6 @@
 static usbd_device *s_usbd_dev = NULL;
 static uint8_t s_usbd_ctrl_buf[192];
 static volatile bool s_usb_configured = false;
-static usb_profile_t s_active_profile = USB_PROFILE_MONOME_FTDI;
 static uint8_t s_ftdi_latency = 2U;
 
 static uint8_t s_tx_ring[USB_MIDI_TX_RING_LEN][4];
@@ -185,24 +183,19 @@ static void usb_set_config_cb(usbd_device *usbd_dev, uint16_t wValue) {
         return;
     }
 
-    if (s_active_profile == USB_PROFILE_MONOME_FTDI) {
-        usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_out_cb);
-        usbd_ep_setup(usbd_dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_in_cb);
-        usbd_ep_setup(usbd_dev, 0x02, USB_ENDPOINT_ATTR_BULK, 64, usb_ftdi_out_cb);
-        usbd_ep_setup(usbd_dev, 0x03, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_out_cb);
-        usbd_ep_setup(usbd_dev, 0x83, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_in_cb);
-        usbd_register_control_callback(usbd_dev, USB_REQ_TYPE_VENDOR, USB_REQ_TYPE_TYPE,
-                                       usb_ftdi_control_cb);
-    } else {
-        usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_out_cb);
-        usbd_ep_setup(usbd_dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_in_cb);
-    }
+    usbd_ep_setup(usbd_dev, 0x01, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_out_cb);
+    usbd_ep_setup(usbd_dev, 0x81, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_in_cb);
+    usbd_ep_setup(usbd_dev, 0x02, USB_ENDPOINT_ATTR_BULK, 64, usb_ftdi_out_cb);
+    usbd_ep_setup(usbd_dev, 0x03, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_out_cb);
+    usbd_ep_setup(usbd_dev, 0x83, USB_ENDPOINT_ATTR_BULK, 64, usb_ep1_in_cb);
+    usbd_register_control_callback(usbd_dev, USB_REQ_TYPE_VENDOR, USB_REQ_TYPE_TYPE,
+                                   usb_ftdi_control_cb);
     s_usb_configured = true;
 }
 
 static void usb_reset_cb(void) {
     s_usb_configured = false;
-    if (s_usbd_dev != NULL && s_active_profile == USB_PROFILE_MONOME_FTDI) {
+    if (s_usbd_dev != NULL) {
         usbd_register_control_callback(s_usbd_dev, USB_REQ_TYPE_VENDOR, USB_REQ_TYPE_TYPE,
                                        usb_ftdi_control_cb);
     }
@@ -227,28 +220,8 @@ static void sysex_append_bytes(const uint8_t *bytes, uint8_t count) {
     }
 }
 
-void usb_select_boot_profile(usb_profile_t profile) {
-    s_active_profile = profile;
-}
-
 usb_profile_t usb_get_profile(void) {
-    return s_active_profile;
-}
-
-void usb_switch_profile(usb_profile_t profile) {
-    if (profile == s_active_profile) {
-        return;
-    }
-    s_active_profile = profile;
-    s_usb_configured = false;
-
-    // Detach PA8 USB D+ pull-up so host OS detects a clean USB unplug before re-enumeration
-    board_usb_dp_pullup(false);
-    for (volatile uint32_t d = 0; d < 20000; d++) {
-        iwdg_reset();
-    }
-
-    usb_midi_init();
+    return USB_PROFILE_MONOME_FTDI;
 }
 
 void usb_midi_init(void) {
@@ -267,17 +240,11 @@ void usb_midi_init(void) {
     rcc_periph_clock_enable(RCC_USB);
     nvic_enable_irq(NVIC_USB_LP_CAN_RX0_IRQ);
 
-    if (s_active_profile == USB_PROFILE_MONOME_FTDI) {
-        s_usbd_dev =
-            usbd_init(&st_usbfs_v1_usb_driver, &usb_ftdi_dev_desc, &usb_ftdi_config_desc,
-                      usb_ftdi_strings, USB_NUM_STRINGS, s_usbd_ctrl_buf, sizeof(s_usbd_ctrl_buf));
-        usbd_register_control_callback(s_usbd_dev, USB_REQ_TYPE_VENDOR, USB_REQ_TYPE_TYPE,
-                                       usb_ftdi_control_cb);
-    } else {
-        s_usbd_dev = usbd_init(&st_usbfs_v1_usb_driver, &usb_dev_desc, &usb_config_desc,
-                               usb_strings, USB_NUM_STRINGS, s_usbd_ctrl_buf,
-                               sizeof(s_usbd_ctrl_buf));
-    }
+    s_usbd_dev =
+        usbd_init(&st_usbfs_v1_usb_driver, &usb_ftdi_dev_desc, &usb_ftdi_config_desc,
+                  usb_ftdi_strings, USB_NUM_STRINGS, s_usbd_ctrl_buf, sizeof(s_usbd_ctrl_buf));
+    usbd_register_control_callback(s_usbd_dev, USB_REQ_TYPE_VENDOR, USB_REQ_TYPE_TYPE,
+                                   usb_ftdi_control_cb);
 
     usbd_register_set_config_callback(s_usbd_dev, usb_set_config_cb);
     usbd_register_reset_callback(s_usbd_dev, usb_reset_cb);
@@ -299,9 +266,7 @@ uint16_t usb_midi_ep1_write(const uint8_t *buf, uint16_t len) {
     if (s_usbd_dev == NULL) {
         return 0;
     }
-    if (s_active_profile == USB_PROFILE_MONOME_FTDI) {
-        usbd_ep_write_packet(s_usbd_dev, 0x83, buf, len);
-    }
+    usbd_ep_write_packet(s_usbd_dev, 0x83, buf, len);
     return usbd_ep_write_packet(s_usbd_dev, 0x81, buf, len);
 }
 
@@ -372,7 +337,7 @@ void usb_midi_flush_tx(void) {
         return;
     }
 
-    if (s_active_profile == USB_PROFILE_MONOME_FTDI && s_ser_tx_tail != s_ser_tx_head &&
+    if (s_ser_tx_tail != s_ser_tx_head &&
         ((*USB_EP_REG(USB_EP1) & USB_EP_TX_STAT) != USB_EP_TX_STAT_VALID)) {
         uint8_t pkt[64];
         pkt[0] = FTDI_MODEM_STATUS_B0;
@@ -391,9 +356,7 @@ void usb_midi_flush_tx(void) {
         return;
     }
 
-    uint8_t midi_ep_idx = (s_active_profile == USB_PROFILE_MONOME_FTDI) ? USB_EP3 : USB_EP1;
-    uint8_t midi_ep_addr = (s_active_profile == USB_PROFILE_MONOME_FTDI) ? 0x83U : 0x81U;
-    if ((*USB_EP_REG(midi_ep_idx) & USB_EP_TX_STAT) == USB_EP_TX_STAT_VALID) {
+    if ((*USB_EP_REG(USB_EP3) & USB_EP_TX_STAT) == USB_EP_TX_STAT_VALID) {
         return;
     }
 
@@ -413,7 +376,7 @@ void usb_midi_flush_tx(void) {
         pkt[offset++] = 0;
     }
 
-    usbd_ep_write_packet(s_usbd_dev, midi_ep_addr, pkt, sizeof(pkt));
+    usbd_ep_write_packet(s_usbd_dev, 0x83U, pkt, sizeof(pkt));
 }
 
 void usb_midi_poll_rx(usb_midi_channel_cb_t on_channel_msg, usb_midi_sysex_cb_t on_sysex_msg) {

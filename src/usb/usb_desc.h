@@ -25,10 +25,6 @@ typedef enum {
     USB_PROFILE_MONOME_FTDI = 1,
 } usb_profile_t;
 
-extern const struct usb_device_descriptor usb_dev_desc;
-extern const struct usb_config_descriptor usb_config_desc;
-extern const char *const usb_strings[USB_NUM_STRINGS];
-
 extern const struct usb_device_descriptor usb_ftdi_dev_desc;
 extern const struct usb_config_descriptor usb_ftdi_config_desc;
 extern const char *const usb_ftdi_strings[USB_NUM_STRINGS];

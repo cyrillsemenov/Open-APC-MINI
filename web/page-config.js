@@ -240,11 +240,11 @@ export function resolveSymbolFromTable(addr, symbols = activeSymbols) {
 
 function decodeResetCauses(flags) {
   const list = [];
-  if (flags & 0x04) list.push("IWDGRST (Watchdog Timeout!)");
-  if (flags & 0x08) list.push("WWDGRST");
+  if (flags & 0x04) list.push("PINRST (NRST)");
+  if (flags & 0x08) list.push("PORRST (Power-On)");
   if (flags & 0x10) list.push("SFTRST (SW/DFU)");
-  if (flags & 0x20) list.push("PORRST (Power-On)");
-  if (flags & 0x40) list.push("PINRST (NRST)");
+  if (flags & 0x20) list.push("IWDGRST (Watchdog Timeout!)");
+  if (flags & 0x40) list.push("WWDGRST");
   if (flags & 0x80) list.push("LPWRRST");
   return list.length > 0
     ? list.join(", ")

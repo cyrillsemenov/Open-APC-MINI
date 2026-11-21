@@ -7,12 +7,6 @@
 typedef void (*usb_midi_channel_cb_t)(uint8_t status, uint8_t data1, uint8_t data2);
 typedef void (*usb_midi_sysex_cb_t)(const uint8_t *msg, uint16_t len);
 
-// Selects the active USB profile before usb_midi_init() is called at boot.
-void usb_select_boot_profile(usb_profile_t profile);
-
-// Switches the active USB profile at runtime (detaches PA8, re-initializes USB, re-attaches PA8).
-void usb_switch_profile(usb_profile_t profile);
-
 // Returns the currently active USB profile.
 usb_profile_t usb_get_profile(void);
 

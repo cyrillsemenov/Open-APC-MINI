@@ -35,7 +35,7 @@ static void clock_init(void) {
         rcc_set_sysclk_source(RCC_CFGR_SW_SYSCLKSEL_HSICLK);
         while (((RCC_CFGR >> RCC_CFGR_SWS_SHIFT) & 0x3U) != RCC_CFGR_SWS_SYSCLKSEL_HSICLK) {}
     }
-    rcc_osc_off(RCC_PLL);
+    RCC_CR &= ~RCC_CR_PLLON;
 
     flash_prefetch_enable();
     rcc_clock_setup_pll(&k_clock_hse8_48mhz);

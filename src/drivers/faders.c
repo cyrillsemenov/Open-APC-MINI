@@ -14,9 +14,12 @@ static uint8_t s_ring_idx = 0;
 static uint8_t s_warm_samples = 0;
 static uint16_t s_stall_guard = 0;
 
-static void adc_dma_hw_init(void) {
-    static const uint8_t k_adc_channels[APC_FADER_COUNT] = {0, 1, 2, 3, 4, 5, 6, 7, 14};
+static void adc_trigger_swstart(void) {
+    ADC_CR2(ADC1) |= ADC_CR2_SWSTART;
+    while ((ADC_CR2(ADC1) & ADC_CR2_SWSTART) != 0UL) {}
+}
 
+static void adc_dma_hw_init(void) {
     rcc_periph_clock_enable(RCC_DMA1);
     rcc_periph_clock_enable(RCC_ADC1);
 
@@ -24,63 +27,56 @@ static void adc_dma_hw_init(void) {
     gpio_set_mode(GPIOC, GPIO_MODE_INPUT, GPIO_CNF_INPUT_ANALOG, APC_FADER_MASTER_PIN);
 
     // DMA1_Channel1: circular 9 half-words from ADC1_DR to s_adc_dma_buf[9]
-    dma_channel_reset(DMA1, DMA_CHANNEL1);
-    dma_set_peripheral_address(DMA1, DMA_CHANNEL1, (uint32_t)&ADC_DR(ADC1));
-    dma_set_memory_address(DMA1, DMA_CHANNEL1, (uint32_t)s_adc_dma_buf);
-    dma_set_read_from_peripheral(DMA1, DMA_CHANNEL1);
-    dma_set_number_of_data(DMA1, DMA_CHANNEL1, APC_FADER_COUNT);
-    dma_disable_peripheral_increment_mode(DMA1, DMA_CHANNEL1);
-    dma_enable_memory_increment_mode(DMA1, DMA_CHANNEL1);
-    dma_set_peripheral_size(DMA1, DMA_CHANNEL1, DMA_CCR_PSIZE_16BIT);
-    dma_set_memory_size(DMA1, DMA_CHANNEL1, DMA_CCR_MSIZE_16BIT);
-    dma_enable_circular_mode(DMA1, DMA_CHANNEL1);
-    dma_set_priority(DMA1, DMA_CHANNEL1, DMA_CCR_PL_HIGH);
-    dma_enable_channel(DMA1, DMA_CHANNEL1);
+    DMA_CCR(DMA1, DMA_CHANNEL1) = 0UL;
+    DMA_IFCR(DMA1) = DMA_IFCR_CGIF1;
+    DMA_CNDTR(DMA1, DMA_CHANNEL1) = APC_FADER_COUNT;
+    DMA_CPAR(DMA1, DMA_CHANNEL1) = (uint32_t)&ADC_DR(ADC1);
+    DMA_CMAR(DMA1, DMA_CHANNEL1) = (uint32_t)s_adc_dma_buf;
+    DMA_CCR(DMA1, DMA_CHANNEL1) = DMA_CCR_PL_HIGH | DMA_CCR_MSIZE_16BIT | DMA_CCR_PSIZE_16BIT |
+                                  DMA_CCR_MINC | DMA_CCR_CIRC | DMA_CCR_EN;
 
     // ADC1: independent, scan, single-shot SWSTART, right-aligned, 9 regular channels @ 71.5 cycles
-    adc_power_off(ADC1);
-    adc_set_dual_mode(ADC_CR1_DUALMOD_IND);
-    adc_enable_scan_mode(ADC1);
-    adc_set_single_conversion_mode(ADC1);
-    adc_set_right_aligned(ADC1);
-    adc_enable_external_trigger_regular(ADC1, ADC_CR2_EXTSEL_SWSTART);
-    adc_set_sample_time_on_all_channels(ADC1, ADC_SMPR_SMP_71DOT5CYC);
-    adc_set_regular_sequence(ADC1, APC_FADER_COUNT, (uint8_t *)k_adc_channels);
-    adc_enable_dma(ADC1);
-    adc_power_on(ADC1);
+    ADC_CR2(ADC1) = 0UL;
+    ADC_CR1(ADC1) = ADC_CR1_SCAN;
+    ADC_SMPR1(ADC1) = 0x00DB6DB6UL; // Ch 10..17 @ 71.5 cycles (0b110 per 3-bit slot)
+    ADC_SMPR2(ADC1) = 0x36DB6DB6UL; // Ch 0..9 @ 71.5 cycles
+    ADC_SQR3(ADC1) = (0UL << 0U) | (1UL << 5U) | (2UL << 10U) | (3UL << 15U) | (4UL << 20U) |
+                     (5UL << 25U);
+    ADC_SQR2(ADC1) = (6UL << 0U) | (7UL << 5U) | (14UL << 10U);
+    ADC_SQR1(ADC1) = ((uint32_t)(APC_FADER_COUNT - 1U) << ADC_SQR1_L_LSB);
+    ADC_CR2(ADC1) = ADC_CR2_EXTTRIG | ADC_CR2_EXTSEL_SWSTART | ADC_CR2_DMA;
+    ADC_CR2(ADC1) |= ADC_CR2_ADON;
 
     // Wait >= t_STAB (~3 us at 48 MHz, >= 2 ADCCLK cycles) before starting ADC calibration
     for (volatile uint16_t d = 0; d < 160U; d++) {}
 
-    adc_reset_calibration(ADC1);
-    adc_calibrate(ADC1);
+    ADC_CR2(ADC1) |= ADC_CR2_RSTCAL;
+    while ((ADC_CR2(ADC1) & ADC_CR2_RSTCAL) != 0UL) {}
+    ADC_CR2(ADC1) |= ADC_CR2_CAL;
+    while ((ADC_CR2(ADC1) & ADC_CR2_CAL) != 0UL) {}
 
-    dma_clear_interrupt_flags(DMA1, DMA_CHANNEL1, DMA_GIF);
-    adc_start_conversion_regular(ADC1);
+    DMA_IFCR(DMA1) = DMA_IFCR_CGIF1;
+    adc_trigger_swstart();
 }
 
-static uint16_t adc_to_hires_14bit(uint16_t avg) {
+static uint16_t adc_scale(uint16_t avg, uint16_t max_out) {
     if (avg <= APC_ADC_ZERO_MAX) {
         return 0U;
     }
     if (avg >= APC_ADC_FULL_MIN) {
-        return APC_FADER_HIRES_MAX;
+        return max_out;
     }
-    uint32_t num = ((uint32_t)(avg - APC_ADC_ZERO_MAX) * (uint32_t)APC_FADER_HIRES_MAX) +
+    uint32_t num = ((uint32_t)(avg - APC_ADC_ZERO_MAX) * (uint32_t)max_out) +
                    ((uint32_t)APC_ADC_SCALE_SPAN / 2UL);
     return (uint16_t)(num / (uint32_t)APC_ADC_SCALE_SPAN);
 }
 
+static uint16_t adc_to_hires_14bit(uint16_t avg) {
+    return adc_scale(avg, APC_FADER_HIRES_MAX);
+}
+
 static uint8_t adc_to_cc_nearest(uint16_t avg) {
-    if (avg <= APC_ADC_ZERO_MAX) {
-        return 0;
-    }
-    if (avg >= APC_ADC_FULL_MIN) {
-        return 127U;
-    }
-    uint32_t num =
-        ((uint32_t)(avg - APC_ADC_ZERO_MAX) * 127UL) + ((uint32_t)APC_ADC_SCALE_SPAN / 2UL);
-    return (uint8_t)(num / (uint32_t)APC_ADC_SCALE_SPAN);
+    return (uint8_t)adc_scale(avg, 127U);
 }
 
 static uint8_t quantize_cc_hysteresis(uint16_t avg, uint8_t cur_cc) {
@@ -109,14 +105,14 @@ static uint8_t quantize_cc_hysteresis(uint16_t avg, uint8_t cur_cc) {
 }
 
 static bool harvest_dma_transfer(void) {
-    if (!dma_get_interrupt_flag(DMA1, DMA_CHANNEL1, DMA_TCIF)) {
+    if ((DMA_ISR(DMA1) & DMA_ISR_TCIF1) == 0UL) {
         if (++s_stall_guard > 5000U) {
             s_stall_guard = 0;
-            dma_disable_channel(DMA1, DMA_CHANNEL1);
-            dma_set_number_of_data(DMA1, DMA_CHANNEL1, APC_FADER_COUNT);
-            dma_clear_interrupt_flags(DMA1, DMA_CHANNEL1, DMA_GIF);
-            dma_enable_channel(DMA1, DMA_CHANNEL1);
-            adc_start_conversion_regular(ADC1);
+            DMA_CCR(DMA1, DMA_CHANNEL1) &= ~DMA_CCR_EN;
+            DMA_CNDTR(DMA1, DMA_CHANNEL1) = APC_FADER_COUNT;
+            DMA_IFCR(DMA1) = DMA_IFCR_CGIF1;
+            DMA_CCR(DMA1, DMA_CHANNEL1) |= DMA_CCR_EN;
+            adc_trigger_swstart();
         }
         return false;
     }
@@ -134,8 +130,8 @@ static bool harvest_dma_transfer(void) {
         s_warm_samples++;
     }
 
-    dma_clear_interrupt_flags(DMA1, DMA_CHANNEL1, DMA_TCIF);
-    adc_start_conversion_regular(ADC1);
+    DMA_IFCR(DMA1) = DMA_IFCR_CTCIF1;
+    adc_trigger_swstart();
     return (s_warm_samples >= APC_ADC_WINDOW_SAMPLES);
 }
 

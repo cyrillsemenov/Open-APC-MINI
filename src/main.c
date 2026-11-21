@@ -42,7 +42,6 @@ int main(void) {
     buttons_init();
 
     (void)board_consume_post_dfu_monome();
-    usb_select_boot_profile(USB_PROFILE_MONOME_FTDI);
 
     usb_midi_init();
     apc_mode_init();

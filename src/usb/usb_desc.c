@@ -4,58 +4,6 @@
 #include <libopencm3/usb/usbd.h>
 #include "usb_desc.h"
 
-const struct usb_device_descriptor usb_dev_desc = {
-    .bLength = USB_DT_DEVICE_SIZE,
-    .bDescriptorType = USB_DT_DEVICE,
-    .bcdUSB = 0x0110,
-    .bDeviceClass = 0x00,
-    .bDeviceSubClass = 0x00,
-    .bDeviceProtocol = 0x00,
-    .bMaxPacketSize0 = 64,
-    .idVendor = USB_VID,
-    .idProduct = USB_PID,
-    .bcdDevice = 0x0100,
-    .iManufacturer = 1,
-    .iProduct = 2,
-    .iSerialNumber = 3,
-    .bNumConfigurations = 1,
-};
-
-static const struct {
-    struct usb_audio_header_descriptor_head header_head;
-    struct usb_audio_header_descriptor_body header_body;
-} __attribute__((packed)) audio_control_functional_descriptors = {
-    .header_head =
-        {
-            .bLength = sizeof(struct usb_audio_header_descriptor_head) +
-                       sizeof(struct usb_audio_header_descriptor_body),
-            .bDescriptorType = USB_AUDIO_DT_CS_INTERFACE,
-            .bDescriptorSubtype = USB_AUDIO_TYPE_HEADER,
-            .bcdADC = 0x0100,
-            .wTotalLength = sizeof(struct usb_audio_header_descriptor_head) +
-                            sizeof(struct usb_audio_header_descriptor_body),
-            .binCollection = 1,
-        },
-    .header_body =
-        {
-            .baInterfaceNr = 0x01,
-        },
-};
-
-static const struct usb_interface_descriptor audio_control_iface[] = {{
-    .bLength = USB_DT_INTERFACE_SIZE,
-    .bDescriptorType = USB_DT_INTERFACE,
-    .bInterfaceNumber = 0,
-    .bAlternateSetting = 0,
-    .bNumEndpoints = 0,
-    .bInterfaceClass = USB_CLASS_AUDIO,
-    .bInterfaceSubClass = USB_AUDIO_SUBCLASS_CONTROL,
-    .bInterfaceProtocol = 0,
-    .iInterface = 0,
-    .extra = &audio_control_functional_descriptors,
-    .extralen = sizeof(audio_control_functional_descriptors),
-}};
-
 static const struct usb_midi_endpoint_descriptor midi_bulk_endp[] = {
     {
         // EP 1 OUT -> Embedded MIDI IN Jack 1
@@ -84,29 +32,6 @@ static const struct usb_midi_endpoint_descriptor midi_bulk_endp[] = {
             {
                 .baAssocJackID = 0x03,
             },
-    },
-};
-
-static const struct usb_endpoint_descriptor bulk_endp[] = {
-    {
-        .bLength = USB_DT_ENDPOINT_SIZE,
-        .bDescriptorType = USB_DT_ENDPOINT,
-        .bEndpointAddress = 0x01,
-        .bmAttributes = USB_ENDPOINT_ATTR_BULK,
-        .wMaxPacketSize = 64,
-        .bInterval = 0x00,
-        .extra = &midi_bulk_endp[0],
-        .extralen = sizeof(midi_bulk_endp[0]),
-    },
-    {
-        .bLength = USB_DT_ENDPOINT_SIZE,
-        .bDescriptorType = USB_DT_ENDPOINT,
-        .bEndpointAddress = 0x81,
-        .bmAttributes = USB_ENDPOINT_ATTR_BULK,
-        .wMaxPacketSize = 64,
-        .bInterval = 0x00,
-        .extra = &midi_bulk_endp[1],
-        .extralen = sizeof(midi_bulk_endp[1]),
     },
 };
 
@@ -189,52 +114,8 @@ static const struct {
         },
 };
 
-static const struct usb_interface_descriptor midi_streaming_iface[] = {{
-    .bLength = USB_DT_INTERFACE_SIZE,
-    .bDescriptorType = USB_DT_INTERFACE,
-    .bInterfaceNumber = 1,
-    .bAlternateSetting = 0,
-    .bNumEndpoints = 2,
-    .bInterfaceClass = USB_CLASS_AUDIO,
-    .bInterfaceSubClass = USB_AUDIO_SUBCLASS_MIDISTREAMING,
-    .bInterfaceProtocol = 0,
-    .iInterface = 0,
-    .endpoint = bulk_endp,
-    .extra = &midi_streaming_functional_descriptors,
-    .extralen = sizeof(midi_streaming_functional_descriptors),
-}};
-
-static const struct usb_interface ifaces[] = {
-    {
-        .num_altsetting = 1,
-        .altsetting = audio_control_iface,
-    },
-    {
-        .num_altsetting = 1,
-        .altsetting = midi_streaming_iface,
-    },
-};
-
-const struct usb_config_descriptor usb_config_desc = {
-    .bLength = USB_DT_CONFIGURATION_SIZE,
-    .bDescriptorType = USB_DT_CONFIGURATION,
-    .wTotalLength = 0,
-    .bNumInterfaces = 2,
-    .bConfigurationValue = 1,
-    .iConfiguration = 0,
-    .bmAttributes = USB_CONFIG_ATTR_DEFAULT,
-    .bMaxPower = 0xFA, // 500 mA
-    .interface = ifaces,
-};
-
-const char *const usb_strings[USB_NUM_STRINGS] = {
-    USB_STRING_VENDOR,
-    USB_STRING_PRODUCT,
-    USB_STRING_SERIAL,
-};
-
 /*---------------------------------------------------------------------------
- * Profile 2: Monome FTDI FT232R (0403:6001) Serial Descriptor Set
+ * Composite Monome FTDI FT232R (0403:6001) + USB-MIDI Descriptor Set
  *---------------------------------------------------------------------------*/
 const struct usb_device_descriptor usb_ftdi_dev_desc = {
     .bLength = USB_DT_DEVICE_SIZE,

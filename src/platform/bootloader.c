@@ -1,4 +1,5 @@
 #include <stdbool.h>
+#include <string.h>
 #include <libopencm3/cm3/scb.h>
 #include <libopencm3/stm32/flash.h>
 #include <libopencm3/stm32/st_usbfs.h>
@@ -33,36 +34,33 @@ static const uint8_t k_raw_unlock_req[9] = {
 #define BOOT_MAGIC_WORD0 0xAAA55A55UL
 #define BOOT_MAGIC_WORD1 0xA33A9559UL
 
+static const uint32_t k_boot_magic[2] = {BOOT_MAGIC_WORD0, BOOT_MAGIC_WORD1};
+
 uint32_t g_fault_stack[64];
 
-static bool write_bootloader_magic_page(uint32_t page_addr) {
-    if ((page_addr & 0x3FFUL) != 0) {
-        return false;
-    }
-
-    const volatile uint32_t *flash_words = (const volatile uint32_t *)page_addr;
-    if (flash_words[0] == BOOT_MAGIC_WORD0 && flash_words[1] == BOOT_MAGIC_WORD1) {
-        return true;
-    }
-
+static bool flash_write_raw(uint32_t page_addr, const uint8_t *data, uint16_t len, uint32_t pad_word,
+                            uint16_t total_words) {
     flash_unlock();
     flash_clear_status_flags();
-    flash_erase_page(page_addr);
-
-    if ((FLASH_SR & (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) != 0) {
-        flash_lock();
-        return false;
+    uint16_t erase_len = (len > 1024U) ? len : 1024U;
+    for (uint16_t off = 0U; off < erase_len; off = (uint16_t)(off + 1024U)) {
+        flash_erase_page(page_addr + (uint32_t)off);
+        if ((FLASH_SR & (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) != 0) {
+            flash_lock();
+            return false;
+        }
     }
 
-    for (uint32_t i = 0; i < 64; i++) {
-        uint32_t word = 0x00000000UL;
-        if (i == 0) {
-            word = BOOT_MAGIC_WORD0;
-        } else if (i == 1) {
-            word = BOOT_MAGIC_WORD1;
+    for (uint16_t i = 0; i < total_words; i++) {
+        uint16_t base = (uint16_t)(i << 2U);
+        uint32_t word = pad_word;
+        uint8_t *wb = (uint8_t *)&word;
+        for (uint8_t b = 0; b < 4U; b++) {
+            if (data != 0 && (uint16_t)(base + b) < len) {
+                wb[b] = data[base + b];
+            }
         }
-
-        uint32_t addr = page_addr + (i * 4UL);
+        uint32_t addr = page_addr + (uint32_t)base;
         flash_program_word(addr, word);
         for (volatile uint32_t d = 0; d < 20; d++) {}
         if (*(const volatile uint32_t *)addr != word) {
@@ -75,6 +73,19 @@ static bool write_bootloader_magic_page(uint32_t page_addr) {
     return true;
 }
 
+static bool write_bootloader_magic_page(uint32_t page_addr) {
+    if ((page_addr & 0x3FFUL) != 0) {
+        return false;
+    }
+
+    const volatile uint32_t *flash_words = (const volatile uint32_t *)page_addr;
+    if (flash_words[0] == BOOT_MAGIC_WORD0 && flash_words[1] == BOOT_MAGIC_WORD1) {
+        return true;
+    }
+
+    return flash_write_raw(page_addr, (const uint8_t *)k_boot_magic, 8U, 0x00000000UL, 64U);
+}
+
 bool bootloader_write_flash_page(uint32_t page_addr, const uint8_t *data, uint16_t len) {
     uint16_t max_len = (page_addr >= 0x08008000UL) ? 4096U : 1024U;
     if (page_addr < 0x08007800UL || page_addr == (uint32_t)(uintptr_t)_boot_magic_page ||
@@ -82,40 +93,9 @@ bool bootloader_write_flash_page(uint32_t page_addr, const uint8_t *data, uint16
         return false;
     }
 
-    flash_unlock();
-    flash_clear_status_flags();
-    uint16_t erase_len = (len > 1024U) ? len : 1024U;
-    for (uint16_t off = 0U; off < erase_len; off = (uint16_t)(off + 1024U)) {
-        flash_erase_page(page_addr + (uint32_t)off);
-        if ((FLASH_SR & (FLASH_SR_PGERR | FLASH_SR_WRPRTERR)) != 0) {
-            flash_lock();
-            return false;
-        }
-    }
-
-    if (data != 0 && len > 0U) {
-        uint16_t words = (uint16_t)((len + 3U) >> 2U);
-        for (uint16_t i = 0; i < words; i++) {
-            uint16_t base = (uint16_t)(i << 2U);
-            uint32_t word = 0xFFFFFFFFUL;
-            uint8_t *wb = (uint8_t *)&word;
-            for (uint8_t b = 0; b < 4U; b++) {
-                if ((uint16_t)(base + b) < len) {
-                    wb[b] = data[base + b];
-                }
-            }
-            uint32_t addr = page_addr + (uint32_t)base;
-            flash_program_word(addr, word);
-            for (volatile uint32_t d = 0; d < 20; d++) {}
-            if (*(const volatile uint32_t *)addr != word) {
-                flash_lock();
-                return false;
-            }
-        }
-    }
-
-    flash_lock();
-    return true;
+    uint16_t raw_len = (data != 0) ? len : 0U;
+    uint16_t words = (raw_len > 0U) ? (uint16_t)((raw_len + 3U) >> 2U) : 0U;
+    return flash_write_raw(page_addr, data, raw_len, 0xFFFFFFFFUL, words);
 }
 
 bool bootloader_clear_crash_log(void) {
@@ -123,7 +103,7 @@ bool bootloader_clear_crash_log(void) {
 }
 
 void bootloader_enter_dfu(void) {
-    board_set_post_dfu_monome(usb_get_profile() == USB_PROFILE_MONOME_FTDI);
+    board_set_post_dfu_monome(true);
 
     // Blank all 8x8 TM1629 pad LEDs and 16 round LEDs before rebooting into DFU
     leds_init();
@@ -171,23 +151,8 @@ void bootloader_fault_dfu(uint32_t fault_msp, uint32_t ipsr) {
 }
 
 void bootloader_check_unlock_packet(const uint8_t pkt[64]) {
-    bool is_midi_unlock = true;
-    for (uint8_t i = 0; i < sizeof(k_updater_unlock_req); i++) {
-        if (pkt[i] != k_updater_unlock_req[i]) {
-            is_midi_unlock = false;
-            break;
-        }
-    }
-
-    bool is_raw_unlock = true;
-    for (uint8_t i = 0; i < sizeof(k_raw_unlock_req); i++) {
-        if (pkt[i] != k_raw_unlock_req[i]) {
-            is_raw_unlock = false;
-            break;
-        }
-    }
-
-    if (!is_midi_unlock && !is_raw_unlock) {
+    if (memcmp(pkt, k_updater_unlock_req, sizeof(k_updater_unlock_req)) != 0 &&
+        memcmp(pkt, k_raw_unlock_req, sizeof(k_raw_unlock_req)) != 0) {
         return;
     }
 
@@ -205,8 +170,7 @@ void bootloader_check_unlock_packet(const uint8_t pkt[64]) {
         if ((*USB_EP_REG(USB_EP1) & USB_EP_TX_STAT) != USB_EP_TX_STAT_VALID) {
             break;
         }
-        if (usb_get_profile() == USB_PROFILE_MONOME_FTDI &&
-            (*USB_EP_REG(USB_EP3) & USB_EP_TX_STAT) != USB_EP_TX_STAT_VALID) {
+        if ((*USB_EP_REG(USB_EP3) & USB_EP_TX_STAT) != USB_EP_TX_STAT_VALID) {
             break;
         }
     }
