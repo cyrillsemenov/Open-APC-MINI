@@ -1,0 +1,567 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Script — Open APC Mini</title>
+        <link href="style.css?v=20261121d" rel="stylesheet" />
+    </head>
+    <body>
+        <div class="container">
+            <div class="masthead">
+                <div class="brand">
+                    <h1>Open APC Mini</h1>
+                    <p class="subtitle">
+                        <i>On-Chip Lua Co-Processor Studio</i>
+                    </p>
+                </div>
+                <div class="header-right">
+                    <div class="top-nav">
+                        <a class="nav-link" href="index.html">Uploader</a>
+                        <a class="nav-link" href="config.html"
+                            >Config / Debug</a
+                        >
+                        <a
+                            class="nav-link active"
+                            href="script.html"
+                            aria-current="page"
+                            >Script</a
+                        >
+                        <a class="nav-link" href="about.html">About</a>
+                        <a
+                            class="nav-link"
+                            href="https://github.com/cyrillsemenov/Open-APC-MINI"
+                            target="_blank"
+                            rel="noopener"
+                            >GitHub</a
+                        >
+                    </div>
+                    <div class="badge" id="midiStatusBadge">
+                        <span class="dot" id="midiStatusDot"></span>
+                        <span id="midiStatusText">WebMIDI Disconnected</span>
+                    </div>
+                </div>
+            </div>
+            <hr class="rule-header" />
+
+            <!-- 1. MIDI Device Connection -->
+            <div class="section">
+                <h2 class="section-title">
+                    <small id="deviceModeLabel" class="status-note"></small>
+                    1. USB-MIDI Connection
+                </h2>
+                <table
+                    class="port-table"
+                    width="100%"
+                    cellspacing="0"
+                    cellpadding="0"
+                >
+                    <tr>
+                        <td width="50%">
+                            <label for="midiOutSelect">MIDI Output Port</label>
+                            <select id="midiOutSelect" disabled>
+                                <option value="">
+                                    Click "Connect WebMIDI" first...
+                                </option>
+                            </select>
+                        </td>
+                        <td width="50%">
+                            <label for="midiInSelect">MIDI Input Port</label>
+                            <select id="midiInSelect" disabled>
+                                <option value="">
+                                    Click "Connect WebMIDI" first...
+                                </option>
+                            </select>
+                        </td>
+                    </tr>
+                </table>
+                <div class="btn-row">
+                    <button id="btnConnectMidi" type="button">
+                        Connect WebMIDI
+                    </button>
+                    <button id="btnProbeDevice" type="button" disabled>
+                        Check Device Status
+                    </button>
+                </div>
+            </div>
+            <hr />
+
+            <!-- 2. On-Chip Lua Co-Processor Studio -->
+            <div class="section">
+                <h2 class="section-title">
+                    <small id="luaWasmBadge" class="status-note"
+                        >Loading Rust/WASM compiler...</small
+                    >
+                    2. On-Chip Lua Co-Processor Studio
+                </h2>
+
+                <div>
+                    <label for="luaPresetSelect"
+                        >Preset Script or Local .lua File</label
+                    >
+                    <select id="luaPresetSelect">
+                        <option value="bouncing_balls.lua">
+                            bouncing_balls.lua — Polyrhythmic Bouncing Ball
+                            Sequencer (14-bit Fader Tempo)
+                        </option>
+                        <option value="game_of_life.lua">
+                            game_of_life.lua — Conway's Game of Life Generative
+                            Sequencer
+                        </option>
+                        <option value="bouncy_echo.lua">
+                            bouncy_echo.lua — Built-in ROM Varibright Diamond
+                            Ripple &amp; Echo
+                        </option>
+                        <option value="ripple_sequencer.lua">
+                            ripple_sequencer.lua — 2D Wave Physics &amp;
+                            Chain-Reaction Ripple Sequencer
+                        </option>
+                        <option value="__custom__">
+                            Custom / Edited Script...
+                        </option>
+                    </select>
+                </div>
+
+                <input
+                    type="file"
+                    id="luaFileInput"
+                    accept=".lua"
+                    class="hidden"
+                />
+
+                <div class="lua-editor-wrap" id="luaEditorWrap">
+                    <pre
+                        class="lua-highlight"
+                        id="luaHighlightPre"
+                        aria-hidden="true"
+                    ><code id="luaHighlightCode" class="language-lua"></code></pre>
+                    <textarea
+                        id="luaEditor"
+                        class="lua-editor"
+                        spellcheck="false"
+                        autocomplete="off"
+                        autocorrect="off"
+                        autocapitalize="off"
+                        placeholder="-- Write Lua 5.4 code for the APC Mini on-chip co-processor (init, on_tick, on_grid, on_fader, on_button)..."
+                    ></textarea>
+                </div>
+
+                <div id="luaErrorBox" class="lua-error-box hidden"></div>
+
+                <table class="meta-table" id="luaMetaGrid">
+                    <thead>
+                        <tr>
+                            <th>Compiler Status</th>
+                            <th>Image Size (Limit 4096 B)</th>
+                            <th>
+                                Entry Offsets (init / tick / grid / fader / btn)
+                            </th>
+                            <th>SysEx Frames</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><b id="luaMetaStatus">—</b></td>
+                            <td><b id="luaMetaSize">—</b></td>
+                            <td><b id="luaMetaEntries">—</b></td>
+                            <td><b id="luaMetaFrames">—</b></td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <div class="mode-bar">
+                    <label class="mode-toggle">
+                        <input id="chkLuaVmEnabled" type="checkbox" disabled />
+                        <b>Lua VM Enabled (SysEx)</b>
+                    </label>
+                    <span class="mode-bar-right">
+                        <a href="#scripting-guide">Scripting Guide &darr;</a>
+                    </span>
+                </div>
+
+                <div class="btn-row">
+                    <button
+                        id="btnLuaUploadRam"
+                        class="primary"
+                        type="button"
+                        disabled
+                    >
+                        Upload &amp; Run in RAM (Live)
+                    </button>
+                    <button id="btnLuaSaveFlash" type="button" disabled>
+                        Upload &amp; Save to Flash (0x08008000)
+                    </button>
+                    <button id="btnLuaResetRom" type="button" disabled>
+                        Reset to Built-in ROM Script
+                    </button>
+                    <button id="btnLuaLoadFile" type="button">
+                        Load .lua File...
+                    </button>
+                    <button id="btnLuaDownloadLuac" type="button" disabled>
+                        Download .luac
+                    </button>
+                </div>
+            </div>
+            <hr />
+
+            <!-- 3. Short Human-Readable Scripting Guide -->
+            <div id="scripting-guide" class="section prose guide-section">
+                <h2 class="section-title">3. Short Scripting Guide</h2>
+
+                <p>
+                    The firmware runs a tiny integer stack VM (<tt>LUA1</tt>
+                    bytecode, up to 4,096 bytes) directly on the APC Mini's
+                    STM32F102 MCU. Your script compiles right here in the
+                    browser (via Rust + <tt>full_moon</tt> WASM) and uploads
+                    over USB-MIDI SysEx in milliseconds — either into live RAM
+                    for instant iteration or into Flash (<tt>0x08008000</tt>) so
+                    it survives power cycles.
+                </p>
+
+                <h3>Quick Starter Example</h3>
+                <pre
+                    class="code-block"
+                ><code id="guideStarterCode" class="language-lua">function init()
+    pos = 0
+    set_tempo(120)
+end
+
+function on_grid(x, y, z)
+    if z == 1 then
+        note_on(0, 48 + x + (7 - y) * 5, 100)
+        led(x, y, 15)
+    else
+        note_off(0, 48 + x + (7 - y) * 5)
+        led(x, y, 0)
+    end
+    return 1 -- consume press (return 0 to pass through)
+end
+
+function on_fader(idx, val, hires)
+    if idx == 8 then
+        set_tempo(30 + ((16383 - hires) &gt;&gt; 7))
+    end
+end
+
+function on_tick(step)
+    led(pos, 8, 0)
+    pos = (pos + 1) &amp; 7
+    led(pos, 8, 1)
+end</code></pre>
+
+                <h3>Callbacks</h3>
+                <p>
+                    Scripts are driven by up to five top-level callback
+                    functions (custom helper functions are not supported):
+                </p>
+                <table class="meta-table guide-table">
+                    <thead>
+                        <tr>
+                            <th>Callback</th>
+                            <th>When It Runs &amp; Arguments</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><tt>init()</tt></td>
+                            <td class="desc">
+                                Runs once on upload, reset, or VM enable.
+                                Top-level statements also act as init if
+                                <tt>init()</tt> is omitted.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>on_tick(step)</tt></td>
+                            <td class="desc">
+                                Cooperative coroutine called every tempo tick
+                                (<tt>step</tt> increments 0, 1, 2&hellip;).
+                                Alias: <tt>tick</tt>.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>on_grid(x, y, z)</tt></td>
+                            <td class="desc">
+                                Grid pad press (<tt>z=1</tt>) / release
+                                (<tt>z=0</tt>), <tt>x,y = 0..7</tt>. Return
+                                <tt>1</tt> to consume the event;
+                                <tt>0</tt> passes it through to MIDI /
+                                <tt>serialosc</tt>. Aliases: <tt>g.key</tt>,
+                                <tt>grid_key</tt>.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>on_fader(idx, val, hires)</tt></td>
+                            <td class="desc">
+                                Fader moved: <tt>idx = 0..8</tt> (8 is Master),
+                                <tt>val = 0..127</tt>,
+                                <tt>hires = 0..16383</tt>. Alias:
+                                <tt>fader_move</tt>.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>on_button(group, idx, z)</tt></td>
+                            <td class="desc">
+                                Round &amp; Shift buttons:
+                                <tt>group=1</tt> Track 1..8 (<tt>idx=0..7</tt>),
+                                <tt>group=2</tt>
+                                Scene 1..8 (<tt>idx=0..7</tt>),
+                                <tt>group=3</tt> SHIFT (<tt>idx=0</tt>). Return
+                                <tt>1</tt> to consume. Alias: <tt>button</tt>.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Coordinates, Overlay &amp; LEDs</h3>
+                <ul>
+                    <li>
+                        <b>Grid Coordinates:</b>
+                        <tt>x = 0..7</tt> (left to right),
+                        <tt>y = 0..7</tt> (top to bottom — Monome convention).
+                    </li>
+                    <li>
+                        <b>Non-Destructive Overlay:</b> Grid LEDs sit on an
+                        overlay layer above Ableton / <tt>serialosc</tt>.
+                        Setting <tt>led(x, y, 0)</tt> clears your overlay and
+                        restores whatever host LED is underneath.
+                    </li>
+                    <li>
+                        <b>Varibright Levels:</b>
+                        <tt>1..15</tt> maps through the active palette on
+                        <a href="config.html">Config / Debug</a> (Default
+                        Palette 0: <tt>1..5</tt> Green, <tt>6..10</tt> Yellow,
+                        <tt>11..15</tt> Red; <tt>16</tt> = 1-bit ON).
+                    </li>
+                    <li>
+                        <b>Round LEDs:</b>
+                        <tt>led(x, 8, state)</tt> controls Track LEDs 1..8 and
+                        <tt>led(8, y, state)</tt> controls Scene LEDs 1..8 (<tt
+                            >0</tt
+                        >
+                        = off, <tt>1</tt> = solid, <tt>2</tt> = blink).
+                    </li>
+                </ul>
+
+                <h3>Built-in Functions</h3>
+                <table class="meta-table guide-table">
+                    <thead>
+                        <tr>
+                            <th>Function</th>
+                            <th>Description</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><tt>led(x, y, val)</tt></td>
+                            <td class="desc">
+                                Set pad overlay (<tt>0..16</tt>) or round LED
+                                (<tt>y=8</tt> Track, <tt>x=8</tt> Scene).
+                                Aliases: <tt>g:led</tt>, <tt>g.led</tt>.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>led_all(val)</tt></td>
+                            <td class="desc">
+                                Fill all 64 pad overlays with
+                                <tt>val</tt> (<tt>0..16</tt>). Aliases:
+                                <tt>g:all</tt>, <tt>g.all</tt>.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>host_led(x, y)</tt></td>
+                            <td class="desc">
+                                Read host LED level (<tt>0..16</tt>) from
+                                <tt>serialosc</tt> or MIDI underneath.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>note_on(ch, note, vel)</tt></td>
+                            <td class="desc">
+                                Send USB-MIDI Note On (<tt>ch 0..15</tt>,
+                                <tt>note/vel 0..127</tt>). Also sends
+                                <tt>serialosc</tt> key if <tt>note &lt; 64</tt>.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>note_off(ch, note)</tt></td>
+                            <td class="desc">
+                                Send USB-MIDI Note Off (and
+                                <tt>serialosc</tt> key-up if
+                                <tt>note &lt; 64</tt>).
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>cc(ch, num, val)</tt></td>
+                            <td class="desc">
+                                Send 7-bit USB-MIDI Control Change
+                                (<tt>0..127</tt>).
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>cc14(ch, cc, val14)</tt></td>
+                            <td class="desc">
+                                Send 14-bit MSB+LSB MIDI CC pair (<tt
+                                    >cc = 0..31</tt
+                                >, <tt>val14 = 0..16383</tt>).
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>pitch_bend(ch, val14)</tt></td>
+                            <td class="desc">
+                                Send 14-bit USB-MIDI Pitch Bend
+                                (<tt>0..16383</tt>).
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>grid_key(x, y, z)</tt></td>
+                            <td class="desc">
+                                Emit synthetic key down (<tt>z=1</tt>) / up
+                                (<tt>z=0</tt>) to MIDI and
+                                <tt>serialosc</tt>. Aliases:
+                                <tt>trigger_key</tt>, <tt>mext_key</tt>.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>key_pulse(x, y, ms)</tt></td>
+                            <td class="desc">
+                                Non-blocking key down + automatic key up after
+                                <tt>ms</tt> (up to 4000 ms, 8 slots).
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>tilt(s, x, y, z)</tt></td>
+                            <td class="desc">
+                                Send Monome <tt>mext</tt> tilt report (sensor
+                                <tt>0..3</tt>). Alias: <tt>mext_tilt</tt>.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <tt>fader(idx)</tt> / <tt>fader_hires(idx)</tt>
+                            </td>
+                            <td class="desc">
+                                Read fader <tt>0..8</tt> as 7-bit
+                                (<tt>0..127</tt>) or 14-bit (<tt>0..16383</tt>;
+                                alias <tt>fader14</tt>).
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>shift()</tt></td>
+                            <td class="desc">
+                                Returns <tt>1</tt> while SHIFT is held, else
+                                <tt>0</tt>.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>set_tempo(ms)</tt></td>
+                            <td class="desc">
+                                Set <tt>on_tick</tt> interval in ms (clamped
+                                <tt>10..2000</tt>, default 55 ms).
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>yield()</tt> / <tt>sleep_ms(ms)</tt></td>
+                            <td class="desc">
+                                Suspend <tt>on_tick</tt> until next loop turn or
+                                for <tt>ms</tt> (up to 4000 ms).
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>rand(max)</tt></td>
+                            <td class="desc">
+                                Pseudo-random integer in
+                                <tt>0 .. max - 1</tt>. Alias:
+                                <tt>math.random</tt>.
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <tt>abs(x)</tt>, <tt>min(a,b)</tt>,
+                                <tt>max(a,b)</tt>
+                            </td>
+                            <td class="desc">
+                                Integer math helpers (also under
+                                <tt>math.*</tt>).
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><tt>life_step()</tt></td>
+                            <td class="desc">
+                                Fast C-accelerated 8&times;8 toroidal Game of
+                                Life step from <tt>mem[0..63]</tt> +
+                                <tt>host_led</tt> into <tt>mem[64..127]</tt>;
+                                returns alive count.
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+
+                <h3>Language Subset &amp; Limits</h3>
+                <ul>
+                    <li>
+                        <b>Integer-Only VM:</b> Locals and stack values are
+                        signed 32-bit integers; globals and shared array
+                        <tt>mem[0..511]</tt> store signed 16-bit integers.
+                        Two-dimensional indexing like <tt>grid[y][x]</tt> maps
+                        automatically to <tt>mem[y * 8 + x]</tt>.
+                    </li>
+                    <li>
+                        <b>Control Flow &amp; Operators:</b>
+                        Supports <tt>if/elseif/else</tt>, <tt>while</tt>,
+                        numeric <tt>for</tt> (constant step), <tt>do..end</tt>,
+                        <tt>return</tt>, arithmetic (<tt>+ - * / // %</tt>),
+                        bitwise (<tt>&amp; | ~ &lt;&lt; &gt;&gt;</tt>), and
+                        comparisons (<tt>== ~= &lt; &lt;= &gt; &gt;=</tt>).
+                        Note: <tt>and</tt> / <tt>or</tt> evaluate both sides
+                        eagerly.
+                    </li>
+                    <li>
+                        <b>Not Supported:</b> Floating-point math, strings,
+                        dynamic tables/closures, <tt>break</tt>,
+                        <tt>repeat..until</tt>, and user-defined helper
+                        functions.
+                    </li>
+                    <li>
+                        <b>Resource Caps:</b> Max 64 globals, 64 locals per
+                        callback, 4,096 B bytecode image. Long
+                        <tt>on_tick</tt> loops are sliced (256 opcodes per
+                        main-loop turn, up to 131,072 ops/tick) so USB-MIDI and
+                        LED scanning stay responsive.
+                    </li>
+                </ul>
+            </div>
+            <hr />
+
+            <!-- 4. Console Log -->
+            <div class="section">
+                <h2 class="section-title">
+                    <button id="btnClearLog" class="status-btn" type="button">
+                        Clear
+                    </button>
+                    Protocol Log
+                </h2>
+                <div class="log-box" id="logBox"></div>
+            </div>
+        </div>
+
+        <script>
+            window.Prism = window.Prism || {};
+            window.Prism.manual = true;
+        </script>
+        <script
+            src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-core.min.js"
+            integrity="sha384-zLRFO4dwowZvh8kzutOb5AWhH7f39HeJp+N7PtHF1SQtTBnifRx0AtmvTYs3F4YV"
+            crossorigin="anonymous"
+            referrerpolicy="no-referrer"
+            defer
+        ></script>
+        <script
+            src="https://cdn.jsdelivr.net/npm/prismjs@1.30.0/components/prism-lua.min.js"
+            integrity="sha384-qnsmaXmSxuN1DguKvNsGsQFG1LyCwf1UaKmFgeac2/ssP3m7kDxtKmWTmOIkuOtE"
+            crossorigin="anonymous"
+            referrerpolicy="no-referrer"
+            defer
+        ></script>
+        <script type="module" src="page-script.js?v=20261121c"></script>
+    </body>
+</html>

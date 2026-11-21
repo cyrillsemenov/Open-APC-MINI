@@ -12,10 +12,10 @@
  *   [8..9]   uint16_t entry_tick   (byte offset or 0xFFFF)
  *   [10..11] uint16_t entry_grid   (byte offset or 0xFFFF)
  *   [12..13] uint16_t entry_fader  (byte offset or 0xFFFF)
- *   [14..15] uint16_t reserved     (0x0000)
+ *   [14..15] uint16_t entry_button (byte offset or 0xFFFF)
  *---------------------------------------------------------------------------*/
 #define LUA_HEADER_SIZE   16U
-#define LUA_MAX_IMAGE_LEN 768U
+#define LUA_MAX_IMAGE_LEN 4096U
 #define LUA_ENTRY_NONE    0xFFFFU
 
 /*---------------------------------------------------------------------------

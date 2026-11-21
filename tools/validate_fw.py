@@ -1131,6 +1131,106 @@ def validate_firmware(fw_path: Path, verbose: bool = True) -> None:
         "async time-sliced VM, key_pulse gate queue, LED overlay, live bytecode upload",
     )
 
+    # 10b. Ripple Sequencer (3070 B image, on_button Scene scales, round LEDs, wave physics & MIDI gates)
+    ripple_src = Path("scripts/ripple_sequencer.lua").read_text(encoding="utf-8")
+    ripple_img = compile_lua_source(ripple_src)
+    for upkt in build_upload_sysex_packets(ripple_img, save_to_flash=False):
+        mcu.usb_ep_out(2, bytes(upkt))
+        mcu.run_steps(40_000)
+        mcu.usb_poll_ep1_in()
+
+    for _ in range(4):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(15_000)
+    mcu.usb_poll_midi_in()
+    mcu.usb_poll_ep1_in()
+
+    check(
+        (mcu.round_led_sinks[0] & 0x08) == 0 and (mcu.round_led_sinks[0] & 0x02) == 0,
+        f"Ripple init() did not light Scene 1 + Track 1 round LEDs (sinks={mcu.round_led_sinks})",
+    )
+
+    # Press Scene 2 (col=9, row=1) -> switches scale to Dorian, lights Scene 2 LED, no stray Note 0x53
+    mcu.pressed_buttons = {(9, 1)}
+    scene_midi: list[bytes] = []
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(15_000)
+        scene_midi.extend(mcu.usb_poll_midi_in())
+    mcu.pressed_buttons.clear()
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(15_000)
+        scene_midi.extend(mcu.usb_poll_midi_in())
+    check(
+        (mcu.round_led_sinks[1] & 0x08) == 0 and (mcu.round_led_sinks[0] & 0x08) != 0,
+        f"Scene 2 press did not switch active scale LED (sinks={mcu.round_led_sinks})",
+    )
+    scene_words = [
+        pkt[i : i + 4]
+        for pkt in scene_midi
+        for i in range(0, len(pkt), 4)
+        if pkt[i] != 0
+    ]
+    check(
+        not any(w[2] == 0x53 for w in scene_words),
+        f"Scene 2 button leaked stray MIDI note 0x53: {[w.hex() for w in scene_words]}",
+    )
+
+    # Tap Note pad at (2, 7) -> Dorian deg=2 -> MIDI note 48 + 3 = 51 (0x33)
+    mcu.pressed_buttons = {(2, 7)}
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(15_000)
+    mcu.pressed_buttons.clear()
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(15_000)
+
+    # Shift + Tap Emitter pad at (0, 7) -> spawns immediate primary wave (8, 120) -> crosses (40, 120)
+    mcu.pressed_buttons = {(10, 0), (0, 7)}
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(15_000)
+    mcu.pressed_buttons.clear()
+    for _ in range(6):
+        for _ in range(8):
+            mcu.call_isr(VEC_SYSTICK)
+        mcu.run_steps(15_000)
+    mcu.usb_poll_midi_in()
+
+    # Step ~20 frames (50 SysTicks = 25 ms each) and verify Note-On (0x33) + 150ms Note-Off
+    ripple_midi: list[bytes] = []
+    for _ in range(20):
+        for _ in range(50):
+            mcu.call_isr(VEC_SYSTICK)
+        for _ in range(12):
+            mcu.run_steps(30_000)
+            ripple_midi.extend(mcu.usb_poll_midi_in())
+            mcu.usb_poll_ep1_in()
+
+    ripple_words = [
+        pkt[i : i + 4]
+        for pkt in ripple_midi
+        for i in range(0, len(pkt), 4)
+        if pkt[i] != 0
+    ]
+    check(
+        any(w[:3] == bytes([0x09, 0x90, 0x33]) and 90 <= w[3] < 127 for w in ripple_words)
+        and bytes([0x08, 0x80, 0x33, 0x00]) in ripple_words,
+        f"Ripple wave did not emit distance-attenuated Dorian Note-On (09 90 33 <vel>) + 150ms Note-Off (08 80 33 00): {[w.hex() for w in ripple_words]}",
+    )
+    ok(
+        "Lua Ripple Sequencer",
+        f"{len(ripple_img)} B image, Scene scale LED, wave expansion -> MIDI Note 0x33 + 150ms gate",
+    )
+
     # 11. Bootloader DFU Unlock & Reset
     unlock_req = bytes(
         [0x04, 0xF0, 0x5A, 0x57, 0x04, 0x6E, 0x28, 0x3C, 0x07, 0x4E, 0x3E, 0xF7]

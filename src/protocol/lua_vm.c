@@ -14,19 +14,19 @@
 #include "usb_desc.h"
 #include "usb_midi.h"
 
-#define LUA_MAX_STEPS   32768U
-#define LUA_SLICE_STEPS 128U
+#define LUA_MAX_STEPS   131072UL
+#define LUA_SLICE_STEPS 256U
 #define LUA_STACK_SIZE  64U
-#define LUA_NUM_LOCALS  32U
+#define LUA_NUM_LOCALS  64U
 #define LUA_NUM_GLOBALS 64U
-#define LUA_MEM_SIZE    256U
+#define LUA_MEM_SIZE    512U
 #define LUA_MAX_GATES   8U
 
 typedef struct {
     bool active;
     uint16_t pc;
     uint8_t sp;
-    uint16_t total_steps;
+    uint32_t total_steps;
     uint32_t wake_tick;
     int32_t ret_val;
     int32_t stack[LUA_STACK_SIZE];
@@ -43,7 +43,7 @@ typedef struct {
 // Built-in default ROM script (compiled from scripts/bouncy_echo.lua)
 static const uint8_t k_rom_script[385] = {
     0x4CU, 0x55U, 0x41U, 0x31U, 0x71U, 0x01U, 0x00U, 0x00U, 0x6DU, 0x00U, 0x0BU, 0x00U,
-    0x55U, 0x00U, 0x00U, 0x00U, 0x02U, 0x00U, 0x07U, 0x00U, 0x02U, 0x37U, 0x40U, 0x09U,
+    0x55U, 0x00U, 0xFFU, 0xFFU, 0x02U, 0x00U, 0x07U, 0x00U, 0x02U, 0x37U, 0x40U, 0x09U,
     0x01U, 0x0AU, 0x00U, 0x04U, 0x02U, 0x02U, 0x01U, 0x20U, 0x31U, 0x51U, 0x00U, 0x06U,
     0x00U, 0x02U, 0x04U, 0x12U, 0x05U, 0x03U, 0x04U, 0x03U, 0x04U, 0x00U, 0x09U, 0x04U,
     0x03U, 0x02U, 0x01U, 0x10U, 0x04U, 0x01U, 0x09U, 0x04U, 0x03U, 0x02U, 0x02U, 0x10U,
@@ -116,6 +116,10 @@ static void set_overlay_led(uint8_t x, uint8_t y, uint8_t level, uint32_t now_ti
 static void clear_overlay_leds(uint32_t now_ticks) {
     monome_mode_clear_overlay(now_ticks);
     apc_mode_clear_overlay(now_ticks);
+    for (uint8_t i = 0U; i < 8U; i++) {
+        leds_set_round(APC_ROUND_GROUP_TRACK, i, APC_ROUND_LED_OFF);
+        leds_set_round(APC_ROUND_GROUP_SCENE, i, APC_ROUND_LED_OFF);
+    }
 }
 
 static void emit_grid_key_event(uint8_t x, uint8_t y, bool pressed) {
@@ -202,6 +206,11 @@ static int32_t call_builtin(lua_coro_t *c, uint8_t fn_id, uint8_t argc, const in
                 v = 16;
             }
             set_overlay_led((uint8_t)x, (uint8_t)y, (uint8_t)v, now_ticks);
+        } else if ((x == 8 && (uint32_t)y < 8U) || (y == 8 && (uint32_t)x < 8U)) {
+            apc_round_led_mode_t m =
+                (v <= 0) ? APC_ROUND_LED_OFF : ((v >= 2) ? APC_ROUND_LED_BLINK : APC_ROUND_LED_ON);
+            leds_set_round((x == 8) ? APC_ROUND_GROUP_SCENE : APC_ROUND_GROUP_TRACK,
+                           (uint8_t)((x == 8) ? y : x), m);
         }
         return 0;
     }
@@ -543,7 +552,7 @@ static void step_coro(lua_coro_t *c, uint16_t slice_budget, uint32_t now_ticks) 
 
         case LUA_OP_GET_MEM:
             if (sp > 0U) {
-                uint8_t idx = (uint8_t)(c->stack[sp - 1U] & (LUA_MEM_SIZE - 1U));
+                uint16_t idx = (uint16_t)((uint32_t)c->stack[sp - 1U] & (LUA_MEM_SIZE - 1U));
                 c->stack[sp - 1U] = (int32_t)s_mem[idx];
             }
             break;
@@ -551,7 +560,7 @@ static void step_coro(lua_coro_t *c, uint16_t slice_budget, uint32_t now_ticks) 
         case LUA_OP_SET_MEM:
             if (sp >= 2U) {
                 int32_t val = c->stack[--sp];
-                uint8_t idx = (uint8_t)(c->stack[--sp] & (LUA_MEM_SIZE - 1U));
+                uint16_t idx = (uint16_t)((uint32_t)c->stack[--sp] & (LUA_MEM_SIZE - 1U));
                 s_mem[idx] = (int16_t)val;
             }
             break;
@@ -725,7 +734,7 @@ static int32_t run_sync_entry(uint8_t header_entry_off, int32_t a0, int32_t a1, 
     if (!init_coro(&sync_coro, header_entry_off, a0, a1, a2, now_ticks)) {
         return 0;
     }
-    step_coro(&sync_coro, 2048U, now_ticks);
+    step_coro(&sync_coro, 4096U, now_ticks);
     return sync_coro.ret_val;
 }
 
@@ -814,14 +823,19 @@ void lua_vm_task(uint32_t now_ticks) {
 }
 
 bool lua_vm_on_button(apc_btn_group_t group, uint8_t index, bool pressed, uint32_t now_ticks) {
-    if (!s_enabled || group != APC_BTN_GROUP_GRID || index >= 64U) {
+    if (!s_enabled) {
         return false;
     }
-    int32_t x = (int32_t)(index & 7U);
-    int32_t y = (int32_t)(7U - (index >> 3U));
     int32_t z = pressed ? 1 : 0;
-    int32_t consumed = run_sync_entry(10U, x, y, z, now_ticks);
-    return (consumed != 0);
+    if (group == APC_BTN_GROUP_GRID && index < 64U) {
+        int32_t x = (int32_t)(index & 7U);
+        int32_t y = (int32_t)(7U - (index >> 3U));
+        return (run_sync_entry(10U, x, y, z, now_ticks) != 0);
+    }
+    if (group != APC_BTN_GROUP_GRID) {
+        return (run_sync_entry(14U, (int32_t)group, (int32_t)index, z, now_ticks) != 0);
+    }
+    return false;
 }
 
 void lua_vm_on_fader(uint8_t fader_idx, uint8_t value, uint16_t hires_value, uint32_t now_ticks) {
