@@ -25,7 +25,7 @@ static const uint8_t k_updater_unlock_req[12] = {
     MIDI_STATUS_SYSEX_END,
 };
 
-// Raw 9-byte DFU unlock sequence (used over serial/FTDI): F0 5A 57 6E 28 3C 4E 3E F7
+// Raw 9-byte DFU unlock sequence (used over serial/CDC): F0 5A 57 6E 28 3C 4E 3E F7
 static const uint8_t k_raw_unlock_req[9] = {
     MIDI_STATUS_SYSEX_START, 0x5AU, 0x57U, 0x6EU, 0x28U, 0x3CU, 0x4EU, 0x3EU, MIDI_STATUS_SYSEX_END,
 };
@@ -165,12 +165,9 @@ void bootloader_check_unlock_packet(const uint8_t pkt[64]) {
     ack[3] = MIDI_STATUS_SYSEX_END;
     usb_midi_ep1_write(ack, sizeof(ack));
 
-    // Wait for USB host to read EP1 IN (or EP3 IN in composite Monome mode) ACK
+    // Wait for USB host to read EP1 IN (USB-MIDI) ACK
     for (volatile uint32_t d = 0; d < 400000; d++) {
         if ((*USB_EP_REG(USB_EP1) & USB_EP_TX_STAT) != USB_EP_TX_STAT_VALID) {
-            break;
-        }
-        if ((*USB_EP_REG(USB_EP3) & USB_EP_TX_STAT) != USB_EP_TX_STAT_VALID) {
             break;
         }
     }

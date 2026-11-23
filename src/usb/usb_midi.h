@@ -28,13 +28,13 @@ bool usb_midi_send_event(uint8_t cin, uint8_t b1, uint8_t b2, uint8_t b3);
 // Packetizes a complete SysEx message (F0 ... F7) into CIN 0x04..0x07 Event Packets.
 bool usb_midi_send_sysex(const uint8_t *data, uint16_t len);
 
-// Enqueues raw serial bytes for FTDI bulk IN transmission (prepends 0x01 0x60 status header).
+// Enqueues raw serial bytes for CDC-ACM bulk IN transmission on EP2 IN.
 bool usb_serial_write(const uint8_t *data, uint16_t len);
 
-// Pops one received byte from the FTDI bulk OUT ring buffer.
+// Pops one received byte from the CDC-ACM bulk OUT ring buffer.
 bool usb_serial_read_byte(uint8_t *out_byte);
 
-// Packs pending TX data (USB-MIDI 4B packets or FTDI serial stream) into EP1 IN when ready.
+// Packs pending TX data (USB-MIDI 4B packets on EP1 IN, CDC-ACM stream on EP2 IN) when ready.
 void usb_midi_flush_tx(void);
 
 // Drains queued RX Event Packets in main-loop context and invokes channel/SysEx callbacks.

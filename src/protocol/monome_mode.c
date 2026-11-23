@@ -14,19 +14,23 @@
 /*---------------------------------------------------------------------------
  * Monome mext (v4) Serial Protocol Opcodes
  *---------------------------------------------------------------------------*/
-#define MEXT_CMD_SYS_QUERY     0x00U
-#define MEXT_CMD_SYS_GET_ID    0x01U
-#define MEXT_CMD_SYS_SET_ID    0x02U
-#define MEXT_CMD_SYS_GET_SIZE  0x03U
-#define MEXT_CMD_SYS_SET_SIZE  0x04U
-#define MEXT_CMD_SYS_GET_ADDR  0x05U
-#define MEXT_CMD_SYS_GET_VER   0x08U
+#define MEXT_CMD_SYS_QUERY       0x00U
+#define MEXT_CMD_SYS_GET_ID      0x01U
+#define MEXT_CMD_SYS_SET_ID      0x02U
+#define MEXT_CMD_SYS_GET_OFFSETS 0x03U
+#define MEXT_CMD_SYS_SET_OFFSET  0x04U
+#define MEXT_CMD_SYS_GET_GRIDSZ  0x05U
+#define MEXT_CMD_SYS_SET_GRIDSZ  0x06U
+#define MEXT_CMD_SYS_GET_ADDR    0x07U
+#define MEXT_CMD_SYS_SET_ADDR    0x08U
+#define MEXT_CMD_SYS_GET_VER     0x0FU
 
-#define MEXT_REP_SYS_QUERY     0x00U
-#define MEXT_REP_SYS_ID        0x01U
-#define MEXT_REP_SYS_SIZE      0x02U
-#define MEXT_REP_SYS_ADDR      0x03U
-#define MEXT_REP_SYS_VER       0x0FU
+#define MEXT_REP_SYS_QUERY       0x00U
+#define MEXT_REP_SYS_ID          0x01U
+#define MEXT_REP_SYS_GRID_OFFSET 0x02U
+#define MEXT_REP_SYS_GRIDSZ      0x03U
+#define MEXT_REP_SYS_ADDR        0x04U
+#define MEXT_REP_SYS_VER         0x0FU
 
 #define MEXT_CMD_LED_OFF       0x10U
 #define MEXT_CMD_LED_ON        0x11U
@@ -45,9 +49,11 @@
 #define MEXT_EV_KEY_UP         0x20U
 #define MEXT_EV_KEY_DOWN       0x21U
 
-#define MEXT_CMD_TILT_DISABLE  0x80U
-#define MEXT_CMD_TILT_ENABLE   0x81U
-#define MEXT_EV_TILT           0x81U
+#define MEXT_CMD_TILT_STATE_REQ 0x80U
+#define MEXT_CMD_TILT_ENABLE    0x81U
+#define MEXT_CMD_TILT_DISABLE   0x82U
+#define MEXT_REP_TILT_STATES    0x80U
+#define MEXT_EV_TILT            0x81U
 
 #define MONOME_LVL_1BIT_ON     16U
 
@@ -176,16 +182,19 @@ void monome_mode_set_brightness(uint8_t bright_idx, uint32_t now_ticks) {
 }
 
 static const uint8_t k_mext_cmd_len[29] = {
-    0U,    0U,    32U,   0U,    2U,    0U,    0xFFU, 0xFFU, 0U,
-    0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU,
-    2U,    2U,    0U,    0U,    10U,   3U,    3U,    1U,    3U,    1U,    34U,   5U,    5U,
+    0U,    0U,    32U,   0U,    3U,    0U,    2U,    0U,    2U,
+    0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0xFFU, 0U,
+    2U,    2U,    0U,    0U,    10U,   3U,    3U,    1U,    3U,    1U,    34U,   6U,    6U,
 };
 
 static uint8_t cmd_payload_len(uint8_t cmd) {
     if (cmd < sizeof(k_mext_cmd_len)) {
         return k_mext_cmd_len[cmd];
     }
-    if (cmd == MEXT_CMD_TILT_DISABLE || cmd == MEXT_CMD_TILT_ENABLE) {
+    if (cmd == MEXT_CMD_TILT_STATE_REQ) {
+        return 0U;
+    }
+    if (cmd == MEXT_CMD_TILT_ENABLE || cmd == MEXT_CMD_TILT_DISABLE) {
         return 1U;
     }
     return 0xFFU;
@@ -250,8 +259,14 @@ static void execute_mext_cmd(uint8_t cmd, const uint8_t *p, uint32_t now_ticks) 
         send_sys_id_reply();
         break;
 
-    case MEXT_CMD_SYS_GET_SIZE: {
-        static const uint8_t k_size_rep[3] = {MEXT_REP_SYS_SIZE, 8U, 8U};
+    case MEXT_CMD_SYS_GET_OFFSETS: {
+        static const uint8_t k_offset_rep[4] = {MEXT_REP_SYS_GRID_OFFSET, 0U, 0U, 0U};
+        usb_serial_write(k_offset_rep, sizeof(k_offset_rep));
+        break;
+    }
+
+    case MEXT_CMD_SYS_GET_GRIDSZ: {
+        static const uint8_t k_size_rep[3] = {MEXT_REP_SYS_GRIDSZ, 8U, 8U};
         usb_serial_write(k_size_rep, sizeof(k_size_rep));
         break;
     }
@@ -337,6 +352,12 @@ static void execute_mext_cmd(uint8_t cmd, const uint8_t *p, uint32_t now_ticks) 
             set_grid_line_nibbles(p[0], &p[2], true, now_ticks);
         }
         break;
+
+    case MEXT_CMD_TILT_STATE_REQ: {
+        uint8_t rep[2] = {MEXT_REP_TILT_STATES, s_tilt_mask};
+        usb_serial_write(rep, sizeof(rep));
+        break;
+    }
 
     case MEXT_CMD_TILT_DISABLE:
     case MEXT_CMD_TILT_ENABLE: {

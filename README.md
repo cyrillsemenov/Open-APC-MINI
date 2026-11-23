@@ -14,7 +14,7 @@ I wanted to fix two things right away:
 Since then, the firmware has grown to support simultaneous composite USB-MIDI + Monome `serialosc` (`mext` v4 with 9 faders mapped as 3 tilt banks), an on-chip Lua co-processor compiled right in the browser via Rust/WASM, SWD-less SysEx telemetry & black-box crash logging (`0x08007800`), a Unicorn Cortex-M3 hardware emulator test suite, and a 4-page WebMIDI app:
 
 - [x] Migrate to [libopencm3/libopencm3](https://github.com/libopencm3/libopencm3)
-- [x] [monome/serialosc](https://github.com/monome/serialosc) compatibility (simultaneous composite USB-MIDI + FTDI `mext` v4)
+- [x] [monome/serialosc](https://github.com/monome/serialosc) &amp; [monome/norns](https://github.com/monome/norns) compatibility (simultaneous composite USB-MIDI + USB CDC-ACM `mext` v4)
 - [x] Poor man's monome grid (on-chip Lua co-processor + browser Rust/WASM compiler)
 - [x] Improve visual feedback (varibright palettes, non-destructive LED overlay)
 

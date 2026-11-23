@@ -42,8 +42,8 @@ GIT_VERSION        := $(shell git describe --tags --exact-match 2>/dev/null || g
 
 USB_VID            ?= 0x09E8
 USB_PID            ?= 0x0028
-USB_STRING_VENDOR  ?= AKAI PROFESSIONAL,LP
-USB_STRING_PRODUCT ?= APC MINI
+USB_STRING_VENDOR  ?= monome
+USB_STRING_PRODUCT ?= monome APC MINI
 USB_STRING_SERIAL  ?= $(GIT_VERSION)
 
 ifeq ($(BOOTLOADER),0)

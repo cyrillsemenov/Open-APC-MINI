@@ -103,10 +103,16 @@ def send_and_wait_ack(
 
 
 def try_serial_dfu_unlock() -> bool:
-    """If the APC Mini is currently in Monome FTDI mode, send DFU unlock via serialoscd OSC or raw serial."""
+    """If the APC Mini is in Monome CDC/serial mode, send DFU unlock via serialoscd OSC or raw serial."""
     if serialosc_trigger_dfu():
         return True
-    serial_ports = sorted(glob.glob("/dev/cu.usbserial-m*") + glob.glob("/dev/ttyUSB*"))
+    serial_ports = sorted(
+        glob.glob("/dev/cu.usbmodemm*")
+        + glob.glob("/dev/tty.usbmodemm*")
+        + glob.glob("/dev/ttyACM*")
+        + glob.glob("/dev/cu.usbserial-m*")
+        + glob.glob("/dev/ttyUSB*")
+    )
     for sp in serial_ports:
         try:
             fd = os.open(sp, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
@@ -148,7 +154,7 @@ def wait_for_bootloader_unlock(port_filter: str):
 
 
 def enter_and_unlock_bootloader(port_filter: str):
-    """Unlocks via system MIDI from either the running App (0x15), Monome FTDI/OSC, or Bootloader (0x3E)."""
+    """Unlocks via system MIDI from either the running App (0x15), Monome CDC/OSC, or Bootloader (0x3E)."""
     try:
         out_port, in_port = open_apc_midi_ports(port_filter, timeout_s=1.5)
     except RuntimeError:

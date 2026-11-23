@@ -113,7 +113,7 @@ BROKEN_CASES: list[BrokenCase] = [
         name="broken_monome_mext",
         wrap_symbol="monome_mode_poll_rx",
         c_stub="void __wrap_monome_mode_poll_rx(unsigned int t) { (void)t; }",
-        expected_err="Missing 2-byte FTDI status header",
+        expected_err="Bad mext /sys reply",
     ),
     BrokenCase(
         name="broken_lua_vm",

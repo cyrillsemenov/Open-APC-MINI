@@ -9,8 +9,8 @@ compact "LUA1" stack bytecode image (< 768 B) for the STM32F102RBT6 on-chip
 Lua co-processor.
 
 Supports live upload (< 50 ms) over either:
-  - Monome FTDI Serial (/dev/cu.usbserial-m* or /dev/ttyUSB*)
-  - Akai APC Mini USB-MIDI SysEx (09E8:0028)
+  - Akai/Monome USB-MIDI SysEx (09E8:0028)
+  - Monome CDC-ACM / Legacy Serial (/dev/cu.usbmodemm*, /dev/ttyACM*, /dev/cu.usbserial-m*, /dev/ttyUSB*)
 """
 
 from __future__ import annotations
@@ -579,7 +579,7 @@ def build_upload_sysex_packets(
 
 
 def send_packets_to_hardware(packets: list[list[int]]) -> str:
-    """Sends Lua SysEx frames over APC/monome USB-MIDI, Monome FTDI serial, or serialoscd UDP OSC."""
+    """Sends Lua SysEx frames over APC/monome USB-MIDI, Monome CDC/serial, or serialoscd UDP OSC."""
     try:
         import mido
 
@@ -598,7 +598,10 @@ def send_packets_to_hardware(packets: list[list[int]]) -> str:
         pass
 
     serial_devs = sorted(
-        glob.glob("/dev/cu.usbserial-m*")
+        glob.glob("/dev/cu.usbmodemm*")
+        + glob.glob("/dev/tty.usbmodemm*")
+        + glob.glob("/dev/ttyACM*")
+        + glob.glob("/dev/cu.usbserial-m*")
         + glob.glob("/dev/tty.usbserial-m*")
         + glob.glob("/dev/ttyUSB*")
     )
@@ -611,7 +614,7 @@ def send_packets_to_hardware(packets: list[list[int]]) -> str:
                     time.sleep(0.004)
             finally:
                 os.close(fd)
-            return f"Monome FTDI serial ({dev})"
+            return f"Monome serial ({dev})"
         except OSError:
             pass
 
@@ -622,8 +625,8 @@ def send_packets_to_hardware(packets: list[list[int]]) -> str:
         return osc_via
 
     raise RuntimeError(
-        "No APC Mini found in USB-MIDI ('APC MINI' / 'monome 64'), "
-        "Monome FTDI serial (/dev/cu.usbserial-m*), or serialoscd UDP OSC (127.0.0.1:12002)"
+        "No APC Mini found in USB-MIDI ('APC MINI' / 'monome APC MINI'), "
+        "Monome serial (/dev/cu.usbmodemm* / /dev/ttyACM*), or serialoscd UDP OSC (127.0.0.1:12002)"
     )
 
 
