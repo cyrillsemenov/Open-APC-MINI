@@ -1,6 +1,6 @@
 [project]
 name = "apc"
-version = "1.0.1"
+version = "1.0.2"
 description = "Open APC Mini Firmware, Validator & WebMIDI Updater"
 readme = "README.md"
 license = { file = "LICENSE" }
